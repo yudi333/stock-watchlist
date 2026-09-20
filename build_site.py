@@ -33,6 +33,7 @@ table{border-collapse:collapse;width:100%;min-width:560px}
 th,td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-size:12px;color:var(--muted);font-weight:600}
 th:nth-child(-n+2),td:nth-child(-n+2),th:last-child,td:last-child{text-align:left}
+table.picks{min-width:820px}
 tr:last-child td{border-bottom:0}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-right:4px;
 border:1px solid currentColor}
@@ -40,6 +41,9 @@ border:1px solid currentColor}
 .t-stop{background:var(--stopbg);color:var(--stop);border-color:var(--stopbg)}
 .up{color:var(--good)}.down{color:var(--bad)}
 h2{font-size:16px;margin:28px 0 10px}
+.reason{white-space:normal;text-align:left;min-width:260px;color:var(--muted);font-size:13px}
+.stopc{color:var(--bad)}.tpc{color:var(--good)}
+.empty{color:var(--muted);padding:14px 12px}
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
 @media (max-width:480px){.charts{grid-template-columns:1fr}}
 .charts figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -61,6 +65,28 @@ def tags(signal):
 def pct(v):
     cls = "up" if v > 0 else "down" if v < 0 else ""
     return f'<span class="{cls}">{v:+.1f}%</span>'
+
+
+def picks_table(csv_name):
+    """讀 candidates_*.csv，回傳 (HTML, 資料日期)。沒有檔案或沒有候選時顯示說明。"""
+    path = BASE_DIR / csv_name
+    if not path.exists():
+        return '<div class="empty">尚無資料</div>', ""
+    d = pd.read_csv(path, dtype={"代號": str})
+    if d.empty:
+        return '<div class="empty">目前沒有符合條件的股票（沒有好標的時空手也是一種選擇）。</div>', ""
+    rows = "".join(
+        f"<tr><td>{r['代號']}</td><td>{html.escape(str(r['名稱']))}</td><td>{r['型態']}</td>"
+        f"<td>{r['買進價']:,.2f}</td>"
+        f"<td class='stopc'>{r['停損價']:,.2f}<br><small>-{r['風險%']}%</small></td>"
+        f"<td class='tpc'>{r['停利價']:,.2f}<br><small>+{r['報酬%']}%</small></td>"
+        f"<td class='reason'>{html.escape(str(r['理由']))}</td></tr>"
+        for _, r in d.iterrows()
+    )
+    table = ('<div class="tablewrap"><table class="picks"><thead><tr><th>代號</th><th>名稱</th>'
+             '<th>型態</th><th>買進價</th><th>停損價</th><th>停利價</th><th>理由</th></tr></thead>'
+             f"<tbody>{rows}</tbody></table></div>")
+    return table, d["資料日期"].max()
 
 
 def main():
@@ -85,6 +111,9 @@ def main():
     data_date = df["資料日期"].max()
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
 
+    daily_html, daily_date = picks_table("candidates_daily.csv")
+    weekly_html, _ = picks_table("candidates_weekly.csv")
+
     page = f"""<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -92,6 +121,13 @@ def main():
 <body><main>
 <h1>台股觀察清單</h1>
 <div class="sub">資料日期 {data_date}　·　網頁更新 {now}（台灣時間）</div>
+<h2>每日候選：可留意的買進標的</h2>
+<div class="sub">從成交金額前 150 名挑出「趨勢向上＋回測或突破」的股票。停利 = 風險的 2 倍報酬。</div>
+{daily_html}
+<h2>每週候選（週線，中期趨勢）</h2>
+<div class="sub">用週線判斷，較適合抱久一點；每週六依整週資料更新。</div>
+{weekly_html}
+<h2>我的觀察清單</h2>
 <div class="tablewrap"><table>
 <thead><tr><th>代號</th><th>名稱</th><th>收盤</th><th>離季線</th><th>RSI</th><th>訊號</th></tr></thead>
 <tbody>{"".join(rows)}</tbody></table></div>

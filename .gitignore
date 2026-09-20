@@ -4,3 +4,4 @@ output/
 report.csv
 __pycache__/
 .DS_Store
+candidates_*.csv

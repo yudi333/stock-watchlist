@@ -203,7 +203,7 @@ def main():
             for key, rule, frame in (("daily", DAILY, df), ("weekly", WEEKLY, to_weekly(df))):
                 r = evaluate(frame, rule)
                 if r:
-                    results[key].append({"代號": code, "名稱": name,
+                    results[key].append({"代號": code, "名稱": name, "Yahoo代號": sym,
                                          "資料日期": df.index[-1].strftime("%Y-%m-%d"), **r})
         except Exception:
             failed += 1                          # 單檔失敗不影響其他檔
@@ -212,7 +212,7 @@ def main():
         picks = sorted(results[key], key=lambda r: r["_sort"])[:MAX_PICKS]
         out = pd.DataFrame(picks).drop(columns=["_sort"], errors="ignore")
         if out.empty:
-            out = pd.DataFrame(columns=["代號", "名稱", "資料日期", "型態", "收盤", "買進價",
+            out = pd.DataFrame(columns=["代號", "名稱", "Yahoo代號", "資料日期", "型態", "收盤", "買進價",
                                         "停損價", "停利價", "風險%", "報酬%", "RSI", "量比",
                                         "距52週高%", "理由"])
         out.to_csv(BASE_DIR / f"candidates_{key}.csv", index=False, encoding="utf-8-sig")

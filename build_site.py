@@ -33,7 +33,7 @@ table{border-collapse:collapse;width:100%;min-width:560px}
 th,td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-size:12px;color:var(--muted);font-weight:600}
 th:nth-child(-n+2),td:nth-child(-n+2),th:last-child,td:last-child{text-align:left}
-table.picks{min-width:820px}
+table.picks{min-width:900px}
 tr:last-child td{border-bottom:0}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-right:4px;
 border:1px solid currentColor}
@@ -44,6 +44,8 @@ h2{font-size:16px;margin:28px 0 10px}
 .reason{white-space:normal;text-align:left;min-width:260px;color:var(--muted);font-size:13px}
 .stopc{color:var(--bad)}.tpc{color:var(--good)}
 .empty{color:var(--muted);padding:14px 12px}
+.links a{font-size:12px;margin-right:8px;color:var(--muted);text-decoration:none;border-bottom:1px dotted}
+.links a:hover{color:var(--text)}
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
 @media (max-width:480px){.charts{grid-template-columns:1fr}}
 .charts figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -60,6 +62,17 @@ def tags(signal):
               "t-weak" if "轉弱" in s else "t-bull" if "多方" in s else ""
         out.append(f'<span class="tag {cls}">{html.escape(s)}</span>')
     return "".join(out)
+
+
+def links(code, symbol):
+    """第三方網站快速連結：TradingView（圖表）、Goodinfo（財務/籌碼）、Yahoo 股市（行情/新聞）。"""
+    market = "TPEX" if str(symbol).endswith(".TWO") else "TWSE"   # TradingView 用交易所前綴
+    items = [
+        ("圖表", f"https://www.tradingview.com/chart/?symbol={market}%3A{code}"),
+        ("財務", f"https://goodinfo.tw/tw/StockDetail.asp?STOCK_ID={code}"),
+        ("行情", f"https://tw.stock.yahoo.com/quote/{code}"),
+    ]
+    return "".join(f'<a href="{u}" target="_blank" rel="noopener">{n}</a>' for n, u in items)
 
 
 def pct(v):
@@ -80,11 +93,12 @@ def picks_table(csv_name):
         f"<td>{r['買進價']:,.2f}</td>"
         f"<td class='stopc'>{r['停損價']:,.2f}<br><small>-{r['風險%']}%</small></td>"
         f"<td class='tpc'>{r['停利價']:,.2f}<br><small>+{r['報酬%']}%</small></td>"
-        f"<td class='reason'>{html.escape(str(r['理由']))}</td></tr>"
+        f"<td class='reason'>{html.escape(str(r['理由']))}</td>"
+        f"<td class='links'>{links(r['代號'], r.get('Yahoo代號', ''))}</td></tr>"
         for _, r in d.iterrows()
     )
     table = ('<div class="tablewrap"><table class="picks"><thead><tr><th>代號</th><th>名稱</th>'
-             '<th>型態</th><th>買進價</th><th>停損價</th><th>停利價</th><th>理由</th></tr></thead>'
+             '<th>型態</th><th>買進價</th><th>停損價</th><th>停利價</th><th>理由</th><th>連結</th></tr></thead>'
              f"<tbody>{rows}</tbody></table></div>")
     return table, d["資料日期"].max()
 
@@ -100,7 +114,8 @@ def main():
         rows.append(
             f"<tr><td>{code}</td><td>{html.escape(str(r['名稱']))}</td>"
             f"<td>{r['收盤']:,.2f}</td><td>{pct(r['離季線%'])}</td>"
-            f"<td>{r['RSI14']:.0f}</td><td>{tags(r['訊號'])}</td></tr>"
+            f"<td>{r['RSI14']:.0f}</td><td>{tags(r['訊號'])}</td>"
+            f"<td class='links'>{links(code, r['Yahoo代號'])}</td></tr>"
         )
         png = CHART_DIR / f"{code}.png"
         if png.exists():
@@ -129,7 +144,7 @@ def main():
 {weekly_html}
 <h2>我的觀察清單</h2>
 <div class="tablewrap"><table>
-<thead><tr><th>代號</th><th>名稱</th><th>收盤</th><th>離季線</th><th>RSI</th><th>訊號</th></tr></thead>
+<thead><tr><th>代號</th><th>名稱</th><th>收盤</th><th>離季線</th><th>RSI</th><th>訊號</th><th>連結</th></tr></thead>
 <tbody>{"".join(rows)}</tbody></table></div>
 <h2>K 線圖（5MA / 20MA / 60MA 與成交量）</h2>
 <div class="charts">{"".join(figures)}</div>

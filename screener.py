@@ -1,13 +1,15 @@
 """
 選股器：每天（日線）與每週（週線）從「成交金額前 N 名」的股票中，
-挑出符合條件的候選股，並算出 買進價 / 停損價 / 停利價 與白話理由。
+用「20 種買進訊號」課程的邏輯（見 signals.py）挑出候選股，
+並算出 買進價 / 停損價 / 停利價 / 賺賠比 與白話理由。
 
 只做資料分析，不會下單。結果僅供參考，不是投資建議。
 
 用法：python screener.py
-輸出：candidates_daily.csv、candidates_weekly.csv（網頁會讀取這兩個檔）
+輸出：candidates_daily.csv、candidates_weekly.csv、market.json（網頁會讀取）
 """
 
+import json
 import re
 import sys
 
@@ -15,24 +17,31 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from signals import DETECTORS, RISK_REWARD, Ctx, build_trade, calc_kd
 from stock_checker import BASE_DIR, calc_rsi, load_config
 
 # ---- 想調整就改這裡 ----
 UNIVERSE_SIZE = 150      # 掃描成交金額前幾名（上市 + 上櫃合計）
 MIN_PRICE = 20           # 股價低於這個數字的不看（太便宜的雞蛋水餃股）
-MAX_PICKS = 10           # 每個清單最多列幾檔
-RISK_REWARD = 2.0        # 停利 = 買進價 + 風險 × 這個倍數（2 = 賠 1 元要賺 2 元才值得）
+MAX_PICKS = 12           # 每個清單最多列幾檔
+MAX_PER_SIGNAL = 4       # 同一種訊號最多列幾檔（避免被單一訊號洗版）
 
-# 兩組規則：日線看短波段，週線看中期趨勢。數字意義見 evaluate() 內註解
+# 兩組參數：日線看短波段，週線看中期趨勢（週線的「根」= 週）
 DAILY = dict(
-    label="日線", unit="日", ma_fast=20, ma_slow=60, up_lookback=5,
-    rsi_range=(45, 70), max_from_high=15, pullback_pct=4, break_n=20,
-    vol_n=20, break_vol=1.5, stop_n=10, risk_range=(3, 8), max_jump=7,
+    label="日線", unit="日", min_bars=130, ma_slow=60, up_lookback=5, pull_mas=(10, 20, 60),
+    pullback_pct=4, recent_n=10, rsi_max=75, max_jump=7, vol_n=20, break_vol=1.3,
+    y_bars=252, pivot_k=3, pivot_gap=8, box_min=15, box_range=0.15, tri_n=45, w_n=90,
+    w_gap=8, hs_n=120, hs_recent=40, flag_len=(5, 25), pole_n=15, pole_gain=0.20,
+    cup_n=120, handle_len=(3, 25), cup_min_side=10, mirror_n=60, mirror_pull_n=30,
+    gap_look=10, gap_pct=0.03, fb_n=40, hammer_range=0.03, risk_range=(3, 8),
 )
 WEEKLY = dict(
-    label="週線", unit="週", ma_fast=10, ma_slow=13, up_lookback=4,
-    rsi_range=(50, 72), max_from_high=12, pullback_pct=6, break_n=8,
-    vol_n=10, break_vol=1.2, stop_n=4, risk_range=(4, 12), max_jump=15,
+    label="週線", unit="週", min_bars=70, ma_slow=13, up_lookback=4, pull_mas=(5, 10),
+    pullback_pct=6, recent_n=5, rsi_max=78, max_jump=15, vol_n=10, break_vol=1.2,
+    y_bars=52, pivot_k=2, pivot_gap=4, box_min=8, box_range=0.15, tri_n=24, w_n=45,
+    w_gap=4, hs_n=60, hs_recent=20, flag_len=(3, 10), pole_n=8, pole_gain=0.25,
+    cup_n=60, handle_len=(2, 8), cup_min_side=6, mirror_n=26, mirror_pull_n=12,
+    gap_look=4, gap_pct=0.05, fb_n=20, hammer_range=0.06, risk_range=(4, 10),
 )
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -94,76 +103,76 @@ def get_universe():
 
 
 # ---------------------------------------------------------------
-# 2. 判斷單一檔：符合就回傳結果 dict，不符合回傳 None
+# 2. 判斷單一檔：套用課程的訊號，符合就回傳結果 dict，不符合回傳 None
 # ---------------------------------------------------------------
 def evaluate(df, p):
-    """df：日線或週線資料；p：DAILY 或 WEEKLY 規則。"""
-    if len(df) < p["ma_slow"] + p["up_lookback"] + 2:
+    """df：日線或週線資料；p：DAILY 或 WEEKLY 參數。"""
+    if len(df) < p["min_bars"]:
         return None
-    close, unit = df["Close"], p["unit"]
-    ma_fast = close.rolling(p["ma_fast"]).mean()
-    ma_slow = close.rolling(p["ma_slow"]).mean()   # 日線=季線(60MA)；週線=13 週線(也是一季)
-    rsi = calc_rsi(close).iloc[-1]
-    last = close.iloc[-1]
-    prev = close.iloc[-2]
-    high52 = df["High"].max()
-    from_high = (last / high52 - 1) * 100                 # 負數 = 比高點低多少 %
-    jump = (last / prev - 1) * 100
-    vol_ratio = df["Volume"].iloc[-1] / df["Volume"].iloc[-1 - p["vol_n"]:-1].mean()
+    x = Ctx(df, p)
+    rsi = calc_rsi(df["Close"]).iloc[-1]
+    jump = (x.c[-1] / x.c[-2] - 1) * 100
 
-    # --- 條件 A：趨勢向上（站上長均線、長均線向上、短均線在長均線之上）---
-    if not (last > ma_slow.iloc[-1]
-            and ma_slow.iloc[-1] > ma_slow.iloc[-1 - p["up_lookback"]]
-            and ma_fast.iloc[-1] > ma_slow.iloc[-1]):
+    # 全域過濾一：過熱不追（RSI 太高或單根暴漲）
+    if rsi > p["rsi_max"] or jump > p["max_jump"]:
         return None
-    # --- 條件 B：不過熱（RSI 在區間內、單根漲幅沒有太誇張）---
-    if not (p["rsi_range"][0] <= rsi <= p["rsi_range"][1]) or jump > p["max_jump"]:
-        return None
-    # --- 條件 C：離 52 週高點不遠（強勢股）---
-    if from_high < -p["max_from_high"]:
+    # 全域過濾二：長上影線爆量收黑 = 出貨訊號（課程：尤其在高檔）
+    rng = x.h[-1] - x.l[-1]
+    if rng > 0 and (x.h[-1] - max(x.o[-1], x.c[-1])) / rng >= 0.5 \
+            and x.c[-1] < x.o[-1] and x.vol_ratio >= 1.5:
         return None
 
-    # --- 條件 D：要有明確的進場型態：回測 或 突破 ---
-    dist_fast = (last / ma_fast.iloc[-1] - 1) * 100       # 離短均線 %
-    prior_high = df["High"].iloc[-1 - p["break_n"]:-1].max()
-    if 0 <= dist_fast <= p["pullback_pct"]:
-        setup = "回測"
-        setup_reason = (f"回測 {p['ma_fast']}{unit}均線附近（僅高於均線 {dist_fast:.1f}%），"
-                        f"拉回沒跌破，風險相對小")
-    elif last > prior_high and vol_ratio >= p["break_vol"]:
-        setup = "突破"
-        setup_reason = (f"突破近 {p['break_n']}{unit}高點，成交量是均量的 {vol_ratio:.1f} 倍，"
-                        f"有資金進場")
-    else:
+    # 逐一檢查每個訊號；每個訊號的停損停利再依課程紀律算一次
+    matches = []
+    for det in DETECTORS:
+        try:
+            m = det(x)
+        except Exception:
+            m = None                       # 單一訊號算錯不影響其他訊號
+        t = build_trade(m, p) if m else None
+        if t:
+            t["prio"] = DETECTORS.index(det)
+            matches.append(t)
+    if not matches:
         return None
+    main = min(matches, key=lambda t: t["prio"])   # 優先順序：突破型態 > 一般進場 > 左側
 
-    # --- 買進 / 停損 / 停利 ---
-    entry = last
-    # 停損：放在近幾根的最低點下方 1%（跌破代表這波走勢失敗）
-    stop = df["Low"].iloc[-p["stop_n"]:].min() * 0.99
-    risk_pct = (entry - stop) / entry * 100
-    lo, hi = p["risk_range"]
-    if risk_pct > hi:
-        return None                        # 停損離太遠，單筆虧損太大，跳過
-    if risk_pct < lo:                      # 停損太近容易被洗出場，至少留 lo%
-        stop = entry * (1 - lo / 100)
-        risk_pct = lo
-    target = entry + (entry - stop) * RISK_REWARD
-    reward_pct = (target / entry - 1) * 100
+    # 加分項：均線多頭排列、KD 黃金交叉、量能
+    ma = {n: x.ma[n] for n in (5, 10, 20, 60)}
+    aligned = all(not pd.isna(ma[n][-1]) for n in ma) and \
+        ma[5][-1] > ma[10][-1] > ma[20][-1] > ma[60][-1] and \
+        all(ma[n][-1] > ma[n][-1 - p["up_lookback"]] for n in ma)
+    k, d = calc_kd(df)
+    kd_cross = k.iloc[-2] <= d.iloc[-2] and k.iloc[-1] > d.iloc[-1]
+    kd_up = k.iloc[-1] > k.iloc[-2] and d.iloc[-1] > d.iloc[-2]
+    notes = []
+    if aligned:
+        notes.append("均線多頭排列（5>10>20>60 且全部向上）")
+    if kd_cross:
+        notes.append(f"KD 黃金交叉（K {k.iloc[-1]:.0f} / D {d.iloc[-1]:.0f}）")
+    elif kd_up:
+        notes.append(f"KD 同步向上（K {k.iloc[-1]:.0f} / D {d.iloc[-1]:.0f}）")
+    if k.iloc[-1] > 80:
+        notes.append("KD 在高檔（>80），追高風險增加")
+    others = [t["signal"] for t in matches if t is not main]
+    if others:
+        notes.append("同時符合：" + "、".join(others))
+    high52 = x.high52
+    notes.append(f"RSI {rsi:.0f}，距 52 週高點 {abs(x.c[-1] / high52 - 1) * 100:.1f}%")
+    if main["extra"] and not main["extra"].startswith("盤整"):
+        notes.append(main["extra"])
 
-    reasons = [
-        f"股價在 {p['ma_slow']}{unit}均線之上且均線向上，{p['ma_fast']}{unit}均線也在其上（多頭排列）",
-        setup_reason,
-        f"RSI {rsi:.0f}，還沒過熱",
-        f"距 52 週高點只差 {abs(from_high):.1f}%，屬強勢股",
-    ]
+    bonus = 3 * aligned + 1 * kd_cross + 1 * (x.vol_ratio >= 1.5)
+    is_left = main["side"] == "左側"
     return {
-        "型態": setup, "收盤": round(last, 2),
-        "買進價": round(entry, 2), "停損價": round(stop, 2), "停利價": round(target, 2),
-        "風險%": round(risk_pct, 1), "報酬%": round(reward_pct, 1),
-        "RSI": round(rsi), "量比": round(vol_ratio, 2), "距52週高%": round(from_high, 1),
-        "理由": "；".join(reasons),
-        "_sort": abs(from_high) + (0 if setup == "突破" else 1),  # 越接近高點排越前
+        "型態": main["signal"], "側別": main["side"], "收盤": round(x.c[-1], 2),
+        "買進價": round(main["entry"], 2), "停損價": round(main["stop"], 2),
+        "停利價": round(main["target"], 2), "風險%": round(main["risk_pct"], 1),
+        "報酬%": round(main["reward_pct"], 1), "賺賠比": round(main["rr"], 1),
+        "RSI": round(rsi), "量比": round(x.vol_ratio, 2),
+        "距52週高%": round((x.c[-1] / high52 - 1) * 100, 1),
+        "理由": "；".join([main["reason"]] + notes),
+        "_sort": is_left * 1000 + main["prio"] * 10 - bonus,   # 右側先、優先度高先、加分多先
     }
 
 
@@ -177,6 +186,26 @@ def to_weekly(df):
 # ---------------------------------------------------------------
 # 3. 主程式
 # ---------------------------------------------------------------
+def market_status():
+    """大盤（加權指數）強弱：課程提醒「大盤在漲時，個股漲的機會較大」。寫入 market.json 給網頁用。"""
+    try:
+        c = yf.Ticker("^TWII").history(period="1y")["Close"].dropna()
+        c = c[c.index.dayofweek < 5]        # 剔除週末假資料
+        ma20, ma60 = c.rolling(20).mean().iloc[-1], c.rolling(60).mean().iloc[-1]
+        if c.iloc[-1] > ma20 and c.iloc[-1] > ma60:
+            text = "偏強：加權指數站上月線與季線，順勢操作機會較大"
+        elif c.iloc[-1] > ma60:
+            text = "中性：加權指數在季線之上但跌破月線，進場宜保守"
+        else:
+            text = "偏弱：加權指數跌破季線，個股上漲機會較小，買進請更保守"
+        info = {"date": c.index[-1].strftime("%Y-%m-%d"), "close": round(float(c.iloc[-1]), 2),
+                "ma20": round(float(ma20), 2), "ma60": round(float(ma60), 2), "text": text}
+        (BASE_DIR / "market.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+        print(f"大盤：{text}")
+    except Exception as e:
+        print(f"[注意] 抓不到大盤資料：{e}")
+
+
 def main():
     try:
         watchlist, _, _, _ = load_config()
@@ -184,11 +213,12 @@ def main():
     except Exception as e:
         print(f"取得股票清單失敗：{e}")
         return 1
+    market_status()
     print(f"掃描 {len(universe)} 檔（成交金額前 {UNIVERSE_SIZE} 名，已排除觀察清單）...")
 
     symbols = [u[2] for u in universe]
     try:
-        data = yf.download(symbols, period="1y", auto_adjust=False, group_by="ticker",
+        data = yf.download(symbols, period="2y", auto_adjust=False, group_by="ticker",
                            progress=False, threads=True)
     except Exception as e:
         print(f"下載資料失敗：{e}")
@@ -200,6 +230,8 @@ def main():
         try:
             df = data[sym].dropna(subset=["Close"])
             df = df[df.index.dayofweek < 5]     # 剔除週末假資料
+            if len(df) < 130:
+                continue                        # 上市不到半年，資料不足
             for key, rule, frame in (("daily", DAILY, df), ("weekly", WEEKLY, to_weekly(df))):
                 r = evaluate(frame, rule)
                 if r:
@@ -209,17 +241,21 @@ def main():
             failed += 1                          # 單檔失敗不影響其他檔
 
     for key, title in (("daily", "每日"), ("weekly", "每週")):
-        picks = sorted(results[key], key=lambda r: r["_sort"])[:MAX_PICKS]
+        picks, per = [], {}
+        for r in sorted(results[key], key=lambda r: r["_sort"]):
+            if per.get(r["型態"], 0) < MAX_PER_SIGNAL and len(picks) < MAX_PICKS:
+                picks.append(r)
+                per[r["型態"]] = per.get(r["型態"], 0) + 1
         out = pd.DataFrame(picks).drop(columns=["_sort"], errors="ignore")
         if out.empty:
-            out = pd.DataFrame(columns=["代號", "名稱", "Yahoo代號", "資料日期", "型態", "收盤", "買進價",
-                                        "停損價", "停利價", "風險%", "報酬%", "RSI", "量比",
+            out = pd.DataFrame(columns=["代號", "名稱", "Yahoo代號", "資料日期", "型態", "側別", "收盤",
+                                        "買進價", "停損價", "停利價", "風險%", "報酬%", "賺賠比", "RSI", "量比",
                                         "距52週高%", "理由"])
         out.to_csv(BASE_DIR / f"candidates_{key}.csv", index=False, encoding="utf-8-sig")
         print(f"\n【{title}候選】{len(out)} 檔")
         for _, r in out.iterrows():
             print(f"  {r['代號']} {r['名稱']}［{r['型態']}］買 {r['買進價']}  "
-                  f"停損 {r['停損價']}（-{r['風險%']}%）  停利 {r['停利價']}（+{r['報酬%']}%）")
+                  f"停損 {r['停損價']}（-{r['風險%']}%）  停利 {r['停利價']}（+{r['報酬%']}%）  賺賠比 {r['賺賠比']}")
     if failed:
         print(f"\n[注意] {failed} 檔資料有問題，已略過。")
     print("\n提醒：以上僅為資料篩選，不是投資建議，本程式不會下單。")

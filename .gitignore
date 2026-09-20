@@ -5,3 +5,6 @@ report.csv
 __pycache__/
 .DS_Store
 candidates_*.csv
+技術分析/
+.DS_Store
+market.json

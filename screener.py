@@ -48,25 +48,47 @@ def to_float(x):
         return 0.0
 
 
+# 備用清單：官方資料抓不到時（例如雲端主機被擋）改掃這些大型權值股
+FALLBACK = {
+    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電", "2382": "廣達",
+    "2881": "富邦金", "2882": "國泰金", "2891": "中信金", "2412": "中華電", "2303": "聯電",
+    "3711": "日月光投控", "2886": "兆豐金", "2884": "玉山金", "2885": "元大金", "2892": "第一金",
+    "1301": "台塑", "1303": "南亞", "2002": "中鋼", "2603": "長榮", "2609": "陽明",
+    "3034": "聯詠", "3231": "緯創", "2376": "技嘉", "2357": "華碩", "2379": "瑞昱",
+    "3008": "大立光", "2395": "研華", "2327": "國巨", "2301": "光寶科", "3037": "欣興",
+    "2345": "智邦", "2368": "金像電", "3443": "創意", "3035": "智原", "6669": "緯穎",
+}
+
+
+def fetch_market(url, code_key, name_key, value_key, price_key, suffix):
+    """抓一個交易所的當日行情，回傳 [(代號, 名稱, 後綴, 成交金額, 收盤價)]。"""
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    return [(d[code_key], d[name_key], suffix, to_float(d[value_key]), to_float(d[price_key]))
+            for d in r.json()]
+
+
 def get_universe():
     """回傳 [(代號, 名稱, Yahoo代號)]，依成交金額由大到小取前 UNIVERSE_SIZE 檔。"""
     items = []
-    # 上市 -> .TW
-    r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-                     headers=HEADERS, timeout=30)
-    for d in r.json():
-        items.append((d["Code"], d["Name"], ".TW",
-                      to_float(d["TradeValue"]), to_float(d["ClosingPrice"])))
-    # 上櫃 -> .TWO
-    r = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-                     headers=HEADERS, timeout=30)
-    for d in r.json():
-        items.append((d["SecuritiesCompanyCode"], d["CompanyName"], ".TWO",
-                      to_float(d["TransactionAmount"]), to_float(d["Close"])))
+    sources = [
+        ("上市", "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+         "Code", "Name", "TradeValue", "ClosingPrice", ".TW"),
+        ("上櫃", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+         "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "Close", ".TWO"),
+    ]
+    for label, *args in sources:
+        try:
+            items += fetch_market(*args)
+        except Exception as e:  # 其中一邊失敗，不影響另一邊
+            print(f"[注意] 抓不到{label}行情：{e}")
 
     # 只留 4 碼、且不是 0 開頭的（0 開頭是 ETF），並排除低價股
     items = [i for i in items
              if re.fullmatch(r"[1-9]\d{3}", i[0]) and i[4] >= MIN_PRICE]
+    if not items:
+        print("[注意] 官方行情都抓不到，改掃內建的大型權值股清單。")
+        return [(c, n, c + ".TW") for c, n in FALLBACK.items()]
     items.sort(key=lambda i: i[3], reverse=True)
     return [(c, n, c + s) for c, n, s, _, _ in items[:UNIVERSE_SIZE]]
 

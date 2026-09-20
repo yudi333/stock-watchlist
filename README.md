@@ -102,7 +102,17 @@ python build_site.py    # 產生 site/index.html（網頁）
 **這是規則篩選，不是預測，也不保證獲利。型態辨識（杯柄、三角收斂等）是用程式規則近似，
 買進前請務必自己開 K 線圖確認，並看新聞與大盤狀況。**
 
-## 自動更新網頁（GitHub Pages）
+## 網頁功能（GitHub Pages）
 
-`.github/workflows/daily.yml` 會在週一到週六台灣時間 15:00 自動執行分析與選股並更新網頁，
-也可以到 GitHub 的 Actions 頁面手動按 Run workflow。
+`.github/workflows/daily.yml` 會在週一到週六台灣時間 15:00 自動執行 `screener.py` 與 `build_site.py` 並更新網頁，
+也可以到 GitHub 的 Actions 頁面手動按 Run workflow。網頁內容：
+
+- **搜尋欄**：輸入代號或公司名稱，查全部上市櫃股票（約 1,900 檔）目前有沒有符合的買進訊號，
+  顯示是否建議買進、買進／停損／停利價、理由，以及 TradingView／Goodinfo／Yahoo 股市連結，可一鍵加入觀察清單。
+- **我的觀察清單**：可「編輯」→ 單選或多選 → 「移除選取」。預設清單來自 `config.yaml` 的 `watchlist`。
+  **清單存在你的瀏覽器裡（localStorage）**，不會上傳，也不會改到 GitHub 上的檔案；
+  換手機或電腦、清除網站資料時不會同步。想改預設清單就編輯 `config.yaml`。
+- **每日／每週候選**、**大盤強弱**（見上一節）。
+- 網頁不含 K 線圖，也不顯示持股、買進價與損益。K 線圖仍可在本機執行 `python stock_checker.py` 產生到 `output/`。
+
+本機預覽：`python screener.py && python build_site.py`，再用瀏覽器開啟 `site/index.html`。

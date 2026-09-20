@@ -8,3 +8,4 @@ candidates_*.csv
 技術分析/
 .DS_Store
 market.json
+stocks.json

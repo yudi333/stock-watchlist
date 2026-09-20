@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>台股觀察清單</title>
+<style>
+:root{--bg:#f7f7f5;--card:#fff;--text:#1f2328;--muted:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;
+--good:#b42318;--bad:#067647;--warn:#b54708;--stop:#fff;--stopbg:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#111315;--card:#1a1d21;--text:#e6e8eb;--muted:#9aa1ab;
+--line:#2c3138;--accent:#7aa2ff;--good:#ff8a80;--bad:#6ee7a8;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+font:15px/1.5 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:16px;margin:28px 0 10px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:12px}
+.market{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:14px 0;font-size:14px}
+.tablewrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:600}
+th.l,td.l{text-align:left}
+tr:last-child td{border-bottom:0}
+table.picks{min-width:980px}
+.reason{white-space:normal;text-align:left;min-width:260px;color:var(--muted);font-size:13px}
+.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin:1px 4px 1px 0;border:1px solid currentColor}
+.t-bull{color:var(--good)}.t-weak{color:var(--bad)}.t-hot{color:var(--warn)}.t-mute{color:var(--muted)}
+.up{color:var(--good)}.down{color:var(--bad)}
+.stopc{color:var(--bad)}.tpc{color:var(--good)}
+.links a{font-size:12px;margin-right:8px;color:var(--muted);text-decoration:none;border-bottom:1px dotted}
+.links a:hover{color:var(--text)}
+.empty{color:var(--muted);padding:14px 12px}
+.note{color:var(--muted);font-size:12px;margin-top:28px}
+/* 按鈕 */
+.btn{font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);
+background:var(--card);color:var(--text);cursor:pointer}
+.btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover:not(:disabled){color:#fff;opacity:.9}
+.btn.danger{color:var(--good);border-color:var(--good)}
+.btn.sm{font-size:12px;padding:3px 8px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.toolbar .grow{flex:1;color:var(--muted);font-size:13px}
+/* 搜尋 */
+.search{position:relative}
+.search input{width:100%;font:inherit;padding:11px 14px;border-radius:10px;border:1px solid var(--line);
+background:var(--card);color:var(--text)}
+.search input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.results{margin-top:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.results button{display:flex;gap:10px;align-items:center;width:100%;text-align:left;font:inherit;
+padding:9px 14px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--text);cursor:pointer}
+.results button:last-child{border-bottom:0}
+.results button:hover,.results button.on{background:var(--bg)}
+.results .code{font-variant-numeric:tabular-nums;color:var(--muted);min-width:44px}
+.results .msg{padding:10px 14px;color:var(--muted);font-size:13px}
+.detail{margin-top:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.detail h3{margin:0 0 2px;font-size:18px}
+.detail .head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+.metrics{display:flex;flex-wrap:wrap;gap:6px 18px;margin:10px 0;font-size:13px;color:var(--muted)}
+.metrics b{color:var(--text);font-weight:600}
+.verdict{padding:8px 12px;border-radius:8px;border:1px solid currentColor;margin:8px 0;font-size:14px}
+.detail .tablewrap{margin-top:8px}
+/* 觀察清單編輯 */
+td.chk,th.chk{width:36px;padding-right:0;text-align:center}
+tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.editing tbody tr{cursor:pointer}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--text);color:var(--bg);
+padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:.92}
+</style></head>
+<body><main>
+<h1>台股觀察清單</h1>
+<div class="sub">資料日期 __DATA_DATE__　·　網頁更新 __NOW__（台灣時間）</div>
+__MARKET__
+
+<h2>搜尋股票</h2>
+<div class="search">
+  <input id="q" type="search" placeholder="輸入股票代號或公司名稱，例如 2330 或 台積電" autocomplete="off">
+  <div id="results" class="results" hidden></div>
+</div>
+<div id="detail"></div>
+
+<h2>我的觀察清單</h2>
+<div id="watch"></div>
+
+<h2>每日候選：可留意的買進標的</h2>
+<div class="sub">依「20 種買進訊號」在日線上偵測（成交金額前 150 名）。停損請以<b>收盤價</b>跌破為準；標「左側」的是提前布局，風險較高。</div>
+__DAILY__
+<h2>每週候選（週線，中期趨勢）</h2>
+<div class="sub">同一套訊號改用週線偵測，較適合抱久一點；每週六依整週資料更新。</div>
+__WEEKLY__
+
+<p class="note">僅為資料分析，不是投資建議，本站不提供下單。資料來自 Yahoo Finance 與證交所／櫃買中心，可能延遲。
+型態辨識是程式規則近似，買進前請自己看 K 線圖確認。<br>
+我的觀察清單存在<b>這個瀏覽器</b>裡，不會上傳，換裝置或清除網站資料時不會跟著走。</p>
+</main>
+<div id="toast" class="toast"></div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const BY = {};
+  D.stocks.forEach(s => BY[s.code] = s);
+  const KEY = 'stock_watchlist_v1';
+  const $ = id => document.getElementById(id);
+
+  // ---------- 觀察清單：存在瀏覽器 localStorage ----------
+  function loadWatch() {
+    try { const v = JSON.parse(localStorage.getItem(KEY)); if (Array.isArray(v)) return v.map(String); } catch (e) {}
+    return D.default_watchlist.slice();
+  }
+  function saveWatch() { try { localStorage.setItem(KEY, JSON.stringify(watch)); } catch (e) {} }
+  let watch = loadWatch();
+  let editing = false;
+  const sel = new Set();
+
+  // ---------- 小工具 ----------
+  function el(tag, attrs, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === 'class') e.className = v;
+      else if (k.startsWith('on')) { if (v) e.addEventListener(k.slice(2), v); }
+      else if (v !== false && v != null) e.setAttribute(k, v);
+    }
+    kids.flat().forEach(c => { if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c)); });
+    return e;
+  }
+  const num = (v, d = 2) => Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const signed = v => (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%';
+  const dir = v => v > 0 ? 'up' : v < 0 ? 'down' : '';
+  const LV = { buy: 't-bull', left: 't-hot', watch: 't-mute', avoid: 't-weak' };
+  const LVNAME = { buy: '可留意買進', left: '左側觀察', watch: '觀望', avoid: '暫不買' };
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800);
+  }
+  function links(s) {
+    const items = [['圖表', `https://www.tradingview.com/chart/?symbol=${s.mkt}%3A${s.code}`],
+                   ['財務', `https://goodinfo.tw/tw/StockDetail.asp?STOCK_ID=${s.code}`],
+                   ['行情', `https://tw.stock.yahoo.com/quote/${s.code}`]];
+    return el('span', { class: 'links' }, items.map(([n, u]) => el('a', { href: u, target: '_blank', rel: 'noopener' }, n)));
+  }
+  function tagsOf(s) {
+    const out = [el('span', { class: 'tag ' + LV[s.level] }, LVNAME[s.level])];
+    s.tags.forEach(t => out.push(el('span', { class: 'tag t-mute' }, t)));
+    return out;
+  }
+
+  // ---------- 加入 / 移除 ----------
+  function addToWatch(code) {
+    if (watch.includes(code)) return;
+    watch.push(code); saveWatch(); refresh();
+    toast('已加入 ' + code + ' ' + (BY[code] ? BY[code].name : ''));
+  }
+  function removeSelected() {
+    if (!sel.size || !confirm('確定從觀察清單移除 ' + sel.size + ' 檔？')) return;
+    watch = watch.filter(c => !sel.has(c)); sel.clear(); saveWatch(); refresh();
+  }
+  function refresh() { renderWatch(); syncAddButtons(); if (current) showDetail(current); }
+  function syncAddButtons() {
+    document.querySelectorAll('[data-add]').forEach(b => {
+      const has = watch.includes(b.dataset.add);
+      b.textContent = has ? '已在清單' : '＋觀察'; b.disabled = has;
+    });
+  }
+
+  // ---------- 我的觀察清單 ----------
+  function renderWatch() {
+    const box = $('watch'); box.replaceChildren();
+    const bar = el('div', { class: 'toolbar' });
+    if (!editing) {
+      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔`),
+                 el('button', { class: 'btn', onclick: () => { editing = true; sel.clear(); renderWatch(); } }, '編輯'));
+    } else {
+      const all = watch.length && sel.size === watch.length;
+      bar.append(el('span', { class: 'grow' }, `點選要移除的股票（已選 ${sel.size} 檔）`),
+        el('button', { class: 'btn', onclick: () => { all ? sel.clear() : watch.forEach(c => sel.add(c)); renderWatch(); } }, all ? '取消全選' : '全選'),
+        el('button', { class: 'btn danger', disabled: !sel.size, onclick: removeSelected }, `移除選取 (${sel.size})`),
+        el('button', { class: 'btn primary', onclick: () => { editing = false; sel.clear(); renderWatch(); } }, '完成'));
+    }
+    box.append(bar);
+    if (!watch.length) {
+      box.append(el('div', { class: 'tablewrap' }, el('div', { class: 'empty' }, '清單是空的。用上方的搜尋欄找股票，按「加入觀察清單」。')));
+    } else {
+      const head = el('tr', {}, editing ? el('th', { class: 'chk' }) : null,
+        ...['代號', '名稱'].map(h => el('th', { class: 'l' }, h)),
+        ...['收盤', '離季線', 'RSI'].map(h => el('th', {}, h)),
+        el('th', { class: 'l' }, '判斷'), el('th', { class: 'l' }, '連結'));
+      const rows = watch.map(code => {
+        const s = BY[code];
+        const toggle = () => { sel.has(code) ? sel.delete(code) : sel.add(code); renderWatch(); };
+        const chk = editing ? el('td', { class: 'chk' }, el('input', { type: 'checkbox', checked: sel.has(code) ? 'checked' : false, onclick: e => { e.stopPropagation(); toggle(); } })) : null;
+        const tr = el('tr', { class: sel.has(code) ? 'sel' : '', onclick: editing ? toggle : null }, chk);
+        if (!s) {
+          tr.append(el('td', { class: 'l' }, code), el('td', { class: 'l', colspan: 6 }, '查無資料（可能已下市或代號有誤）'));
+        } else {
+          tr.append(el('td', { class: 'l' }, s.code), el('td', { class: 'l' }, s.name),
+            el('td', {}, num(s.close)), el('td', { class: dir(s.vs60) }, signed(s.vs60)), el('td', {}, String(s.rsi)),
+            el('td', { class: 'l' }, tagsOf(s)), el('td', { class: 'l' }, links(s)));
+        }
+        return tr;
+      });
+      const wrap = el('div', { class: 'tablewrap' + (editing ? ' editing' : '') },
+        el('table', {}, el('thead', {}, head), el('tbody', {}, rows)));
+      box.append(wrap);
+    }
+    if (editing) box.append(el('div', { class: 'sub', style: 'margin-top:8px' },
+      el('button', { class: 'btn sm', onclick: () => { if (confirm('還原成預設的觀察清單？目前的清單會被取代。')) { watch = D.default_watchlist.slice(); sel.clear(); saveWatch(); refresh(); } } }, '還原成預設清單')));
+  }
+
+  // ---------- 搜尋 ----------
+  let current = null, hits = [], hi = 0;
+  const input = $('q'), results = $('results');
+  function search() {
+    const q = input.value.trim().toLowerCase();
+    results.replaceChildren();
+    if (!q) { results.hidden = true; hits = []; return; }
+    hits = D.stocks.filter(s => s.code.startsWith(q) || s.name.toLowerCase().includes(q))
+      .sort((a, b) => (b.code === q) - (a.code === q) || a.code.localeCompare(b.code)).slice(0, 8);
+    hi = 0; results.hidden = false;
+    if (!hits.length) { results.append(el('div', { class: 'msg' }, `找不到「${input.value.trim()}」。只收錄上市、上櫃的 4 碼個股（不含 ETF、興櫃）。`)); return; }
+    hits.forEach((s, i) => results.append(el('button', { class: i === 0 ? 'on' : '', onclick: () => pick(s.code) },
+      el('span', { class: 'code' }, s.code), el('span', {}, s.name),
+      el('span', { class: 'tag ' + LV[s.level], style: 'margin-left:auto' }, LVNAME[s.level]))));
+  }
+  function pick(code) { input.value = ''; results.hidden = true; results.replaceChildren(); showDetail(code); }
+  input.addEventListener('input', search);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && hits.length) pick(hits[hi].code);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); if (!hits.length) return;
+      hi = (hi + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length;
+      [...results.children].forEach((b, i) => b.classList.toggle('on', i === hi));
+    }
+  });
+
+  function showDetail(code) {
+    current = code;
+    const s = BY[code], box = $('detail'); box.replaceChildren();
+    if (!s) return;
+    const inList = watch.includes(code);
+    const metric = (k, v, cls) => el('span', {}, k + ' ', el('b', { class: cls || '' }, v));
+    const parts = [
+      el('div', { class: 'head' },
+        el('div', {}, el('h3', {}, `${s.code} ${s.name}`), el('div', { class: 'sub', style: 'margin:0' }, s.mkt === 'TPEX' ? '上櫃' : '上市')),
+        el('div', { class: 'toolbar', style: 'margin:0' }, links(s),
+          el('button', { class: 'btn primary', disabled: inList, onclick: () => addToWatch(code) }, inList ? '已在觀察清單' : '加入觀察清單'),
+          el('button', { class: 'btn sm', onclick: () => { current = null; box.replaceChildren(); } }, '關閉'))),
+      el('div', { class: 'metrics' },
+        metric('收盤', num(s.close)), metric('今日', signed(s.chg), dir(s.chg)), metric('離季線', signed(s.vs60), dir(s.vs60)),
+        metric('RSI', String(s.rsi)), metric('量比', s.vr + ' 倍'), metric('距 52 週高', signed(s.fh))),
+      el('div', { class: 'verdict ' + LV[s.level] }, el('b', {}, LVNAME[s.level] + '：'), s.advice, ' ', ...s.tags.map(t => el('span', { class: 'tag t-mute' }, t)))
+    ];
+    if (s.sigs.length) {
+      const th = ['週期', '訊號', '買進價', '停損價', '停利價', '賺賠比', '理由'].map((h, i) => el('th', { class: i < 2 || i === 6 ? 'l' : '' }, h));
+      const rows = s.sigs.map(g => el('tr', {},
+        el('td', { class: 'l' }, g.tf),
+        el('td', { class: 'l' }, g.name, g.side === '左側' ? el('span', { class: 'tag t-hot', style: 'margin-left:6px' }, '左側') : null),
+        el('td', {}, num(g.entry)),
+        el('td', { class: 'stopc' }, num(g.stop), el('br'), el('small', {}, '-' + g.risk + '%')),
+        el('td', { class: 'tpc' }, num(g.target), el('br'), el('small', {}, '+' + g.gain + '%')),
+        el('td', {}, String(g.rr)),
+        el('td', { class: 'reason' }, g.reason)));
+      parts.push(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, el('tr', {}, th)), el('tbody', {}, rows))),
+        el('div', { class: 'sub', style: 'margin:8px 0 0' }, '停損請以收盤價跌破為準。這是規則篩選，不是預測或投資建議。'));
+    } else {
+      parts.push(el('div', { class: 'sub', style: 'margin:8px 0 0' }, '目前日線與週線都沒有符合課程買進訊號的型態。'));
+    }
+    box.append(el('div', { class: 'detail' }, parts));
+  }
+
+  document.addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b) addToWatch(b.dataset.add); });
+  refresh();
+  if (!D.stocks.length) $('detail').append(el('div', { class: 'detail' }, '今天的分析資料產生失敗，搜尋與觀察清單暫時無法使用，稍後再試。'));
+})();
+</script>
+</body></html>

@@ -18,7 +18,7 @@ import requests
 import yfinance as yf
 
 from signals import DETECTORS, RISK_REWARD, Ctx, build_trade, calc_kd
-from stock_checker import BASE_DIR, calc_rsi, load_config
+from stock_checker import BASE_DIR, calc_rsi, judge, load_config
 
 # ---- 想調整就改這裡 ----
 UNIVERSE_SIZE = 150      # 掃描成交金額前幾名（上市 + 上櫃合計）
@@ -78,28 +78,27 @@ def fetch_market(url, code_key, name_key, value_key, price_key, suffix):
 
 
 def get_universe():
-    """回傳 [(代號, 名稱, Yahoo代號)]，依成交金額由大到小取前 UNIVERSE_SIZE 檔。"""
+    """回傳所有 4 碼個股（上市 + 上櫃）：[{code, name, sym, mkt, value, price}]。"""
     items = []
     sources = [
         ("上市", "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-         "Code", "Name", "TradeValue", "ClosingPrice", ".TW"),
+         "Code", "Name", "TradeValue", "ClosingPrice", ".TW", "TWSE"),
         ("上櫃", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-         "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "Close", ".TWO"),
+         "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "Close", ".TWO", "TPEX"),
     ]
-    for label, *args in sources:
+    for label, url, ck, nk, vk, pk, suffix, mkt in sources:
         try:
-            items += fetch_market(*args)
+            for c, n, _, v, pr in fetch_market(url, ck, nk, vk, pk, suffix):
+                # 只留 4 碼、且不是 0 開頭的（0 開頭是 ETF）
+                if re.fullmatch(r"[1-9]\d{3}", c):
+                    items.append(dict(code=c, name=n, sym=c + suffix, mkt=mkt, value=v, price=pr))
         except Exception as e:  # 其中一邊失敗，不影響另一邊
             print(f"[注意] 抓不到{label}行情：{e}")
-
-    # 只留 4 碼、且不是 0 開頭的（0 開頭是 ETF），並排除低價股
-    items = [i for i in items
-             if re.fullmatch(r"[1-9]\d{3}", i[0]) and i[4] >= MIN_PRICE]
     if not items:
         print("[注意] 官方行情都抓不到，改掃內建的大型權值股清單。")
-        return [(c, n, c + ".TW") for c, n in FALLBACK.items()]
-    items.sort(key=lambda i: i[3], reverse=True)
-    return [(c, n, c + s) for c, n, s, _, _ in items[:UNIVERSE_SIZE]]
+        items = [dict(code=c, name=n, sym=c + ".TW", mkt="TWSE", value=1e12 - i, price=999)
+                 for i, (c, n) in enumerate(FALLBACK.items())]
+    return items
 
 
 # ---------------------------------------------------------------
@@ -173,6 +172,7 @@ def evaluate(df, p):
         "距52週高%": round((x.c[-1] / high52 - 1) * 100, 1),
         "理由": "；".join([main["reason"]] + notes),
         "_sort": is_left * 1000 + main["prio"] * 10 - bonus,   # 右側先、優先度高先、加分多先
+        "_matches": matches,
     }
 
 
@@ -206,39 +206,112 @@ def market_status():
         print(f"[注意] 抓不到大盤資料：{e}")
 
 
+def r2(v):
+    return round(float(v), 2)
+
+
+def signal_rows(tf, res):
+    """把 evaluate 的所有符合訊號轉成網頁用的簡單 dict。"""
+    if not res:
+        return []
+    return [dict(tf=tf, name=t["signal"], side=t["side"], entry=r2(t["entry"]), stop=r2(t["stop"]),
+                 target=r2(t["target"]), rr=round(t["rr"], 1), risk=round(t["risk_pct"], 1),
+                 gain=round(t["reward_pct"], 1),
+                 reason=t["reason"] + ("；" + t["extra"] if t["extra"] and not t["extra"].startswith("盤整") else ""))
+            for t in res["_matches"]]
+
+
+def advise(tags, sigs):
+    """綜合判斷：回傳 (等級, 白話建議)。等級：buy / left / watch / avoid。"""
+    right = [x for x in sigs if x["side"] == "右側"]
+    left = [x for x in sigs if x["side"] == "左側"]
+    if right:
+        txt = f"符合 {len(right)} 個買進訊號，可留意買進"
+        if "轉弱，暫不買" in tags:
+            txt += "（股價仍在季線之下，屬底部型態，風險較高）"
+        return "buy", txt
+    if left:
+        return "left", "只有左側（提前布局）訊號，風險高，僅適合小量或先觀察"
+    if "過熱，不追" in tags:
+        return "avoid", "過熱，不追"
+    if "轉弱，暫不買" in tags:
+        return "avoid", "轉弱（跌破季線），暫不買"
+    if "多方" in tags:
+        return "watch", "趨勢偏多，但目前沒有進場訊號，等回測均線或突破再看"
+    return "watch", "站上季線但季線未向上，觀望"
+
+
+def analyze_stock(item, df):
+    """分析一檔：回傳 (網頁用紀錄, 日線結果, 週線結果)；資料不足回傳 None。"""
+    df = df.dropna(subset=["Close"])
+    df = df[df.index.dayofweek < 5]        # 剔除週末假資料
+    if len(df) < 130:
+        return None                        # 上市不到半年，資料不足
+    close = df["Close"]
+    ma60 = close.rolling(60).mean()
+    last, prev = close.iloc[-1], close.iloc[-2]
+    rsi = calc_rsi(close).iloc[-1]
+    avg_vol = df["Volume"].iloc[-21:-1].mean()
+    row = {"close": last, "ma60": ma60.iloc[-1], "ma60_up": bool(ma60.iloc[-1] > ma60.iloc[-6]),
+           "day_change_pct": (last / prev - 1) * 100, "rsi": rsi}
+    tags = judge(row).split("；")
+    rd, rw = evaluate(df, DAILY), evaluate(to_weekly(df), WEEKLY)
+    sigs = signal_rows("日線", rd) + signal_rows("週線", rw)
+    level, advice = advise(tags, sigs)
+    rec = dict(code=item["code"], name=item["name"], mkt=item["mkt"], close=r2(last),
+               chg=round(row["day_change_pct"], 2), vs60=round((last / ma60.iloc[-1] - 1) * 100, 1),
+               rsi=round(rsi), vr=round(df["Volume"].iloc[-1] / avg_vol, 2) if avg_vol > 0 else 0,
+               fh=round((last / df["High"].iloc[-252:].max() - 1) * 100, 1),
+               tags=tags, level=level, advice=advice, sigs=sigs)
+    return rec, rd, rw, df.index[-1].strftime("%Y-%m-%d")
+
+
 def main():
     try:
         watchlist, _, _, _ = load_config()
-        universe = [u for u in get_universe() if u[0] not in watchlist]  # 排除你已在觀察的
+        stocks = get_universe()
     except Exception as e:
         print(f"取得股票清單失敗：{e}")
         return 1
+    # 候選股只從「成交金額前 N 名」挑（流動性夠），並排除你已在觀察的
+    ranked = sorted((s for s in stocks if s["price"] >= MIN_PRICE), key=lambda s: s["value"], reverse=True)
+    liquid = {s["code"] for s in ranked[:UNIVERSE_SIZE]} - set(watchlist)
     market_status()
-    print(f"掃描 {len(universe)} 檔（成交金額前 {UNIVERSE_SIZE} 名，已排除觀察清單）...")
-
-    symbols = [u[2] for u in universe]
-    try:
-        data = yf.download(symbols, period="2y", auto_adjust=False, group_by="ticker",
-                           progress=False, threads=True)
-    except Exception as e:
-        print(f"下載資料失敗：{e}")
-        return 1
+    print(f"分析全部 {len(stocks)} 檔（候選股從成交金額前 {UNIVERSE_SIZE} 名挑，{len(liquid)} 檔）...")
 
     results = {"daily": [], "weekly": []}
-    failed = 0
-    for code, name, sym in universe:
+    records, data_date, failed = [], "", 0
+    CHUNK = 100                             # 分批下載，避免一次要太多被擋
+    for i in range(0, len(stocks), CHUNK):
+        part = stocks[i:i + CHUNK]
         try:
-            df = data[sym].dropna(subset=["Close"])
-            df = df[df.index.dayofweek < 5]     # 剔除週末假資料
-            if len(df) < 130:
-                continue                        # 上市不到半年，資料不足
-            for key, rule, frame in (("daily", DAILY, df), ("weekly", WEEKLY, to_weekly(df))):
-                r = evaluate(frame, rule)
-                if r:
-                    results[key].append({"代號": code, "名稱": name, "Yahoo代號": sym,
-                                         "資料日期": df.index[-1].strftime("%Y-%m-%d"), **r})
-        except Exception:
-            failed += 1                          # 單檔失敗不影響其他檔
+            data = yf.download([s["sym"] for s in part], period="2y", auto_adjust=False,
+                               group_by="ticker", progress=False, threads=True)
+        except Exception as e:
+            print(f"[注意] 第 {i // CHUNK + 1} 批下載失敗：{e}")
+            failed += len(part)
+            continue
+        for item in part:
+            try:
+                out = analyze_stock(item, data[item["sym"]])
+                if not out:
+                    continue
+                rec, rd, rw, date = out
+                records.append(rec)
+                data_date = max(data_date, date)
+                if item["code"] in liquid:
+                    for key, r in (("daily", rd), ("weekly", rw)):
+                        if r:
+                            results[key].append({"代號": item["code"], "名稱": item["name"],
+                                                 "Yahoo代號": item["sym"], "資料日期": date, **r})
+            except Exception:
+                failed += 1                 # 單檔失敗不影響其他檔
+        print(f"  已處理 {min(i + CHUNK, len(stocks))}/{len(stocks)}", flush=True)
+
+    (BASE_DIR / "stocks.json").write_text(
+        json.dumps({"date": data_date, "stocks": records}, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8")
+    print(f"\n已存 stocks.json：{len(records)} 檔可搜尋")
 
     for key, title in (("daily", "每日"), ("weekly", "每週")):
         picks, per = [], {}
@@ -246,7 +319,7 @@ def main():
             if per.get(r["型態"], 0) < MAX_PER_SIGNAL and len(picks) < MAX_PICKS:
                 picks.append(r)
                 per[r["型態"]] = per.get(r["型態"], 0) + 1
-        out = pd.DataFrame(picks).drop(columns=["_sort"], errors="ignore")
+        out = pd.DataFrame(picks).drop(columns=["_sort", "_matches"], errors="ignore")
         if out.empty:
             out = pd.DataFrame(columns=["代號", "名稱", "Yahoo代號", "資料日期", "型態", "側別", "收盤",
                                         "買進價", "停損價", "停利價", "風險%", "報酬%", "賺賠比", "RSI", "量比",
@@ -259,7 +332,7 @@ def main():
     if failed:
         print(f"\n[注意] {failed} 檔資料有問題，已略過。")
     print("\n提醒：以上僅為資料篩選，不是投資建議，本程式不會下單。")
-    return 0
+    return 0 if records else 1
 
 
 if __name__ == "__main__":

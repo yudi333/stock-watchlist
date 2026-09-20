@@ -61,6 +61,42 @@ def picks_table(csv_name):
             f"<tbody>{rows}</tbody></table></div>")
 
 
+def multi_signal_html(stocks):
+    """同時符合 2 個（含）以上「不同種類」右側買進訊號的股票，包成預設收合的 <details>。"""
+    found = []
+    for st in stocks:
+        right = [g for g in st["sigs"] if g["side"] == "右側"]
+        kinds = {g["name"] for g in right}
+        if len(kinds) >= 2 and "過熱，不追" not in st["tags"]:   # 過熱的不列入「可買進」
+            found.append((len(kinds), st, right))
+    found.sort(key=lambda x: (-x[0], x[1]["code"]))
+    if not found:
+        body = '<div class="empty">目前沒有同時符合 2 個以上買進訊號的股票。</div>'
+    else:
+        rows = ""
+        for n, st, right in found:
+            lines = "".join(
+                f"<div class='sigline'><b>{html.escape(g['name'])}</b>"
+                f"<span class='tag t-mute'>{g['tf']}</span><br>"
+                f"<small>停損 <span class='stopc'>{g['stop']:,.2f}</span>（-{g['risk']}%）　"
+                f"停利 <span class='tpc'>{g['target']:,.2f}</span>（+{g['gain']}%）　"
+                f"賺賠比 {g['rr']}</small></div>" for g in right)
+            mkt = st["mkt"]
+            rows += (f"<tr><td class='l'><a href='#' data-detail='{st['code']}'>{st['code']}</a></td>"
+                     f"<td class='l'>{html.escape(st['name'])}<br><span class='tag t-bull'>{n} 個訊號</span></td>"
+                     f"<td>{st['close']:,.2f}</td><td class='l reason' style='color:inherit'>{lines}</td>"
+                     f"<td class='l links'>{links(st['code'], '.TWO' if mkt == 'TPEX' else '.TW')}"
+                     f"<br><button class='btn sm' data-add='{st['code']}'>＋觀察</button></td></tr>")
+        body = ('<div class="tablewrap"><table class="multi"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
+                '<th>收盤（買進價）</th><th class="l">符合的訊號與價位</th><th class="l">連結</th></tr></thead>'
+                f"<tbody>{rows}</tbody></table></div>"
+                '<div class="sub" style="margin-top:8px">點代號可看每個訊號的詳細理由。'
+                '提醒：部分組合本質上是同一個動作（例如「鏡射突破前高」與「窄幅盤整突破」常一起出現，'
+                '「回測均線」與「鏡射拉回」也是），並非完全獨立的確認，仍請自己看 K 線圖。</div>')
+    return (f'<details class="fold"><summary>多重訊號：同時符合 2 個（含）以上買進訊號'
+            f'<span class="tag t-bull">{len(found)} 檔</span></summary>{body}</details>')
+
+
 def main():
     SITE_DIR.mkdir(exist_ok=True)
     try:
@@ -85,6 +121,7 @@ def main():
     page = (TEMPLATE.read_text(encoding="utf-8")
             .replace("__DATA_DATE__", stocks["date"]).replace("__NOW__", now)
             .replace("__MARKET__", market_html)
+            .replace("__MULTI__", multi_signal_html(stocks["stocks"]))
             .replace("__DAILY__", picks_table("candidates_daily.csv"))
             .replace("__WEEKLY__", picks_table("candidates_weekly.csv"))
             .replace("__DATA__", data_json))

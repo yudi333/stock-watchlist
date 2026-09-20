@@ -61,6 +61,19 @@ padding:9px 14px;border:0;border-bottom:1px solid var(--line);background:none;co
 .metrics b{color:var(--text);font-weight:600}
 .verdict{padding:8px 12px;border-radius:8px;border:1px solid currentColor;margin:8px 0;font-size:14px}
 .detail .tablewrap{margin-top:8px}
+/* 收合區塊 */
+details.fold{margin-top:28px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:0 14px}
+details.fold[open]{padding-bottom:14px}
+details.fold summary{cursor:pointer;padding:12px 0;font-size:16px;font-weight:600;list-style:none}
+details.fold summary::-webkit-details-marker{display:none}
+details.fold summary::before{content:'▸';display:inline-block;width:1.2em;color:var(--muted)}
+details.fold[open] summary::before{content:'▾'}
+details.fold summary .tag{margin-left:8px;font-weight:400;vertical-align:1px}
+.sigline{padding:4px 0}
+.sigline small{color:var(--muted);font-size:12px}
+table.multi{min-width:720px}
+table.multi td{vertical-align:top}
+td a[data-detail]{color:var(--accent);text-decoration:none;border-bottom:1px dotted}
 /* 觀察清單編輯 */
 td.chk,th.chk{width:36px;padding-right:0;text-align:center}
 tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
@@ -83,6 +96,8 @@ __MARKET__
 
 <h2>我的觀察清單</h2>
 <div id="watch"></div>
+
+__MULTI__
 
 <h2>每日候選：可留意的買進標的</h2>
 <div class="sub">依「20 種買進訊號」在日線上偵測（成交金額前 150 名）。停損請以<b>收盤價</b>跌破為準；標「左側」的是提前布局，風險較高。</div>
@@ -271,7 +286,11 @@ __WEEKLY__
     box.append(el('div', { class: 'detail' }, parts));
   }
 
-  document.addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b) addToWatch(b.dataset.add); });
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-add]'); if (b) addToWatch(b.dataset.add);
+    const d = e.target.closest('[data-detail]');
+    if (d) { e.preventDefault(); showDetail(d.dataset.detail); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  });
   refresh();
   if (!D.stocks.length) $('detail').append(el('div', { class: 'detail' }, '今天的分析資料產生失敗，搜尋與觀察清單暫時無法使用，稍後再試。'));
 })();

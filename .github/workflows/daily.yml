@@ -1,9 +1,9 @@
-# 週一到週六台灣時間 15:00（UTC 07:00）自動分析並更新網頁
+# 週一到週五台灣時間 15:00（UTC 07:00）自動分析並更新網頁
 name: daily-update
 
 on:
   schedule:
-    - cron: "0 7 * * 1-6"   # 週一到週六（週六會用整週資料更新週線候選）
+    - cron: "0 7 * * 1-5"   # 週一到週五
   workflow_dispatch:   # 也可以在 GitHub 網頁上手動按「Run workflow」
 
 permissions:

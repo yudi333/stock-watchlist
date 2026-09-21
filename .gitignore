@@ -9,3 +9,4 @@ candidates_*.csv
 .DS_Store
 market.json
 stocks.json
+message.txt

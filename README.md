@@ -104,7 +104,7 @@ python build_site.py    # 產生 site/index.html（網頁）
 
 ## 網頁功能（GitHub Pages）
 
-`.github/workflows/daily.yml` 會在週一到週六台灣時間 15:00 自動執行 `screener.py` 與 `build_site.py` 並更新網頁，
+`.github/workflows/daily.yml` 會在週一到週五台灣時間 15:00 自動執行 `screener.py` 與 `build_site.py` 並更新網頁，
 也可以到 GitHub 的 Actions 頁面手動按 Run workflow。網頁內容：
 
 - **搜尋欄**：輸入代號或公司名稱，查全部上市櫃股票（約 1,900 檔）目前有沒有符合的買進訊號，
@@ -119,3 +119,10 @@ python build_site.py    # 產生 site/index.html（網頁）
 - 網頁不含 K 線圖，也不顯示持股、買進價與損益。K 線圖仍可在本機執行 `python stock_checker.py` 產生到 `output/`。
 
 本機預覽：`python screener.py && python build_site.py`，再用瀏覽器開啟 `site/index.html`。
+
+## Telegram 更新通知（尚未啟用）
+
+[notify.py](notify.py) 已備好（更新後傳摘要到 Telegram，失敗時也會通知），但**目前沒有接進自動更新流程**。
+之後要啟用時：先向 @BotFather 建立機器人，把 token 與 chat id 存成 GitHub 的
+`TG_BOT_TOKEN`、`TG_CHAT_ID` secret，再把通知步驟加回 `.github/workflows/daily.yml`。
+token 等同密碼，不要寫進程式或貼給別人。

@@ -255,13 +255,11 @@ def advise(tags, sigs):
     return "watch", "站上季線但季線未向上，觀望"
 
 
-def analyze_stock(item, df):
-    """分析一檔：回傳 (網頁用紀錄, 日線結果, 週線結果)；資料不足回傳 None。"""
-    df = df.dropna(subset=["Close"])
-    df = df[df.index.dayofweek < 5]        # 剔除週末假資料
-    df = drop_unfinished_today(df)         # 盤中不採用今天還沒收完的 K 棒
-    if len(df) < 130:
-        return None                        # 上市不到半年，資料不足
+HIST_DAYS = 6            # 網頁上每檔股票額外保存前幾個交易日的狀態（預設收合，點開可回測）
+
+
+def snapshot(df):
+    """算 df「最後一根」當天的狀態。回看歷史時，df 會被截掉最後幾天再呼叫，等於回到當天判斷。"""
     close = df["Close"]
     ma60 = close.rolling(60).mean()
     last, prev = close.iloc[-1], close.iloc[-2]
@@ -273,12 +271,37 @@ def analyze_stock(item, df):
     rd, rw = evaluate(df, DAILY), evaluate(to_weekly(df), WEEKLY)
     sigs = signal_rows("日線", rd) + signal_rows("週線", rw)
     level, advice = advise(tags, sigs)
-    rec = dict(code=item["code"], name=item["name"], mkt=item["mkt"], close=r2(last),
-               chg=round(row["day_change_pct"], 2), vs60=round((last / ma60.iloc[-1] - 1) * 100, 1),
-               rsi=round(rsi), vr=round(df["Volume"].iloc[-1] / avg_vol, 2) if avg_vol > 0 else 0,
-               fh=round((last / df["High"].iloc[-252:].max() - 1) * 100, 1),
-               tags=tags, level=level, advice=advice, sigs=sigs)
-    return rec, rd, rw, df.index[-1].strftime("%Y-%m-%d")
+    core = dict(date=df.index[-1].strftime("%Y-%m-%d"), close=r2(last),
+                chg=round(row["day_change_pct"], 2), vs60=round((last / ma60.iloc[-1] - 1) * 100, 1),
+                rsi=round(rsi), vr=round(df["Volume"].iloc[-1] / avg_vol, 2) if avg_vol > 0 else 0,
+                fh=round((last / df["High"].iloc[-252:].max() - 1) * 100, 1),
+                tags=tags, level=level, advice=advice, sigs=sigs)
+    return core, rd, rw
+
+
+def analyze_stock(item, df):
+    """分析一檔：回傳 (網頁用紀錄, 日線結果, 週線結果, 資料日期)；資料不足回傳 None。"""
+    df = df.dropna(subset=["Close"])
+    df = df[df.index.dayofweek < 5]        # 剔除週末假資料
+    df = drop_unfinished_today(df)         # 盤中不採用今天還沒收完的 K 棒
+    if len(df) < 130:
+        return None                        # 上市不到半年，資料不足
+    core, rd, rw = snapshot(df)
+    date = core.pop("date")
+    rec = dict(code=item["code"], name=item["name"], mkt=item["mkt"], **core)
+
+    # 前 HIST_DAYS 個交易日：回到當天重新判斷一次（用精簡欄位，減少網頁大小）
+    hist = []
+    for k in range(1, HIST_DAYS + 1):
+        sub = df.iloc[:-k]
+        if len(sub) < 130:
+            break
+        h, _, _ = snapshot(sub)
+        hist.append(dict(d=h["date"], c=h["close"], g=h["chg"], v=h["vs60"], r=h["rsi"], l=h["level"],
+                         t=h["tags"], s=[[g["name"], g["side"], g["tf"], g["lo"], g["hi"], g["stop"], g["target"]]
+                                         for g in h["sigs"]]))
+    rec["hist"] = hist
+    return rec, rd, rw, date
 
 
 def main():

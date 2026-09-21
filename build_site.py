@@ -111,7 +111,7 @@ def main():
         stocks = {"date": "-", "stocks": []}    # 選股失敗時仍產生網頁，搜尋會顯示提示
 
     watchlist, _, _, _ = load_config()          # 預設的觀察清單（使用者在瀏覽器裡改的不會動到這裡）
-    data = {"stocks": stocks["stocks"], "default_watchlist": watchlist}
+    data = {"date": stocks["date"], "stocks": stocks["stocks"], "default_watchlist": watchlist}
 
     market_html = ""
     try:

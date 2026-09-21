@@ -81,6 +81,14 @@ details.fold summary .tag{margin-left:8px;font-weight:400;vertical-align:1px}
 table.multi{min-width:720px}
 table.multi td{vertical-align:top}
 td a[data-detail]{color:var(--accent);text-decoration:none;border-bottom:1px dotted}
+/* 觀察清單：展開前幾天的紀錄 */
+.foldbtn{font:inherit;background:none;border:0;padding:0;color:inherit;cursor:pointer;text-align:left}
+.foldbtn:hover{color:var(--accent)}
+.foldbtn .caret{display:inline-block;width:1.1em;color:var(--muted);font-size:12px}
+tr.child td{background:color-mix(in srgb,var(--muted) 7%,transparent);font-size:13px;color:var(--muted)}
+tr.child td:first-child{border-left:3px solid var(--accent)}
+tr.child small{font-size:11px}
+.hsig{font-size:12px;color:var(--muted);white-space:normal;margin-top:2px}
 /* 觀察清單編輯 */
 td.chk,th.chk{width:36px;padding-right:0;text-align:center}
 tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
@@ -137,6 +145,7 @@ __WEEKLY__
   let watch = loadWatch();
   let editing = false;
   const sel = new Set();
+  const open = new Set();       // 目前展開前幾天紀錄的股票
 
   // ---------- 小工具 ----------
   function el(tag, attrs, ...kids) {
@@ -190,11 +199,29 @@ __WEEKLY__
   }
 
   // ---------- 我的觀察清單 ----------
+  const WD = ['日', '一', '二', '三', '四', '五', '六'];
+  function histRows(s) {
+    if (!s.hist || !s.hist.length) return [el('tr', { class: 'child' }, el('td', { class: 'l', colspan: 7 }, '歷史資料不足'))];
+    return s.hist.map((x, i) => {
+      const wd = WD[new Date(x.d + 'T00:00:00').getDay()];
+      const sigs = x.s.map(g => el('div', { class: 'hsig' },
+        `${g[0]}（${g[2]}${g[1] === '左側' ? '．左側' : ''}）　買 ${num(g[3])}～${num(g[4])}（當天收盤${x.c > g[4] ? '高於區間' : x.c < g[3] ? '低於區間' : '在區間內'}）　損 ${num(g[5])}　利 ${num(g[6])}`));
+      return el('tr', { class: 'child' },
+        el('td', { class: 'l' }, x.d.slice(5) + ' 週' + wd), el('td', { class: 'l' }, `前 ${i + 1} 個交易日`),
+        el('td', {}, num(x.c), el('br'), el('small', { class: dir(x.g) }, signed(x.g))),
+        el('td', { class: dir(x.v) }, signed(x.v)), el('td', {}, String(x.r)),
+        el('td', { class: 'l' }, el('span', { class: 'tag ' + LV[x.l] }, LVNAME[x.l]),
+          x.t.map(t => el('span', { class: 'tag t-mute' }, t)), sigs),
+        el('td', { class: 'l' }));
+    });
+  }
   function renderWatch() {
     const box = $('watch'); box.replaceChildren();
     const bar = el('div', { class: 'toolbar' });
     if (!editing) {
-      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔`),
+      const allOpen = watch.length && watch.every(c => open.has(c) || !BY[c]);
+      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔　·　最新 ${D.date}　·　點股票名稱展開前 6 個交易日`),
+                 el('button', { class: 'btn', onclick: () => { allOpen ? open.clear() : watch.forEach(c => open.add(c)); renderWatch(); } }, allOpen ? '全部收合' : '全部展開'),
                  el('button', { class: 'btn', onclick: () => { editing = true; sel.clear(); renderWatch(); } }, '編輯'));
     } else {
       const all = watch.length && sel.size === watch.length;
@@ -211,7 +238,7 @@ __WEEKLY__
         ...['代號', '名稱'].map(h => el('th', { class: 'l' }, h)),
         ...['收盤', '離季線', 'RSI'].map(h => el('th', {}, h)),
         el('th', { class: 'l' }, '判斷'), el('th', { class: 'l' }, '連結'));
-      const rows = watch.map(code => {
+      const rows = watch.flatMap(code => {
         const s = BY[code];
         const toggle = () => { sel.has(code) ? sel.delete(code) : sel.add(code); renderWatch(); };
         const chk = editing ? el('td', { class: 'chk' }, el('input', { type: 'checkbox', checked: sel.has(code) ? 'checked' : false, onclick: e => { e.stopPropagation(); toggle(); } })) : null;
@@ -219,11 +246,15 @@ __WEEKLY__
         if (!s) {
           tr.append(el('td', { class: 'l' }, code), el('td', { class: 'l', colspan: 6 }, '查無資料（可能已下市或代號有誤）'));
         } else {
-          tr.append(el('td', { class: 'l' }, s.code), el('td', { class: 'l' }, s.name),
+          const isOpen = open.has(code);
+          const nameCell = editing ? s.name : el('button', { class: 'foldbtn', 'aria-expanded': isOpen ? 'true' : 'false',
+            title: '展開／收合前 6 個交易日', onclick: () => { isOpen ? open.delete(code) : open.add(code); renderWatch(); } },
+            el('span', { class: 'caret' }, isOpen ? '▾' : '▸'), s.name);
+          tr.append(el('td', { class: 'l' }, s.code), el('td', { class: 'l' }, nameCell),
             el('td', {}, num(s.close)), el('td', { class: dir(s.vs60) }, signed(s.vs60)), el('td', {}, String(s.rsi)),
             el('td', { class: 'l' }, tagsOf(s)), el('td', { class: 'l' }, links(s)));
         }
-        return tr;
+        return (s && open.has(code) && !editing) ? [tr, ...histRows(s)] : [tr];
       });
       const wrap = el('div', { class: 'tablewrap' + (editing ? ' editing' : '') },
         el('table', {}, el('thead', {}, head), el('tbody', {}, rows)));

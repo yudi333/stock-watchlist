@@ -14,6 +14,7 @@ import pandas as pd
 RISK_REWARD = 2.0       # 賺賠比至少 2:1（課程：2:1 或 3:1）
 HARD_MAX_RISK = 0.10    # 課程：停損最多 10%
 MAX_TARGET_GAIN = 0.40  # 滿足點公式有時算出翻倍以上，停利價保守限制在 +40%
+CHASE_PCT = 0.03        # 突破後最多追到突破價 +3%，超過就算追高（不追，等回測）
 
 
 # ---------------------------------------------------------------
@@ -66,8 +67,20 @@ def calc_kd(df, n=9):
     return k, d
 
 
-def _sig(name, side, entry, defence, target, reason, extra=None):
-    return dict(signal=name, side=side, entry=float(entry), defence=float(defence),
+def brk_zone(level):
+    """突破型訊號的買進區間：突破價 ～ 突破價 +3%。"""
+    return (level, level * (1 + CHASE_PCT))
+
+
+ZN_BREAK = "突破價～突破價 +3%，超過就是追高，不追，等回測到區間再買"
+
+
+def _sig(name, side, zone, defence, target, reason, extra=None, zone_note=""):
+    """zone = (買進區間下緣, 上緣)。停損停利以「上緣」（最壞的成交價）計算，賺賠比才不會高估。"""
+    lo, hi = float(zone[0]), float(zone[1])
+    if zone_note:
+        reason += f"；買進區間 {lo:.2f}～{hi:.2f}（{zone_note}）"
+    return dict(signal=name, side=side, entry=hi, zone=(lo, hi), defence=float(defence),
                 target=None if target is None else float(target), reason=reason,
                 extra=extra or "")
 
@@ -105,10 +118,10 @@ def sig15_cup_handle(x):
         return None
     if not (c[-1] > RH and c[-2] <= RH * 1.02 and x.vol_ok and c[-1] <= RH * 1.06):
         return None
-    return _sig("訊號15 杯柄突破", "右側", c[-1], HL, c[-1] + depth,
+    return _sig("訊號15 杯柄突破", "右側", brk_zone(RH), HL, RH + depth,
                 f"杯柄型態：杯深 {depth / LH * 100:.0f}%，杯柄整理後突破右杯口 {RH:.2f}，"
                 f"量是均量 {x.vol_ratio:.1f} 倍；滿足點 = 突破價 + 杯深",
-                "杯柄常在誘空，確認突破當天收盤站上再進")
+                "杯柄常在誘空，確認突破當天收盤站上再進", ZN_BREAK)
 
 
 # ---------------------------------------------------------------
@@ -135,15 +148,16 @@ def sig8_w_bottom(x):
     c = x.c[-1]
     target = H + (H - base)                                # 突破點 + 震幅
     if c > H and x.c[-2] <= H * 1.03 and x.vol_ok and c <= H * 1.06:
-        return _sig("訊號8 W底突破", "右側", c, L2, target,
+        return _sig("訊號8 W底突破", "右側", brk_zone(H), L2, target,
                     f"低價圈 W 底：兩底 {L1:.2f} / {L2:.2f}，突破頸線 {H:.2f}，"
-                    f"量是均量 {x.vol_ratio:.1f} 倍；滿足點 = 突破點 + 震幅")
+                    f"量是均量 {x.vol_ratio:.1f} 倍；滿足點 = 突破點 + 震幅",
+                    zone_note=ZN_BREAK)
     if (i2 <= x.n - 1 - k and x.n - 1 - i2 <= 12 and L2 <= c <= L2 * 1.05
             and c > x.c[-2] and c < H):
-        return _sig("訊號17 W底右底", "左側", c, min(L1, L2), target,
+        return _sig("訊號17 W底右底", "左側", (L2, L2 * (1 + CHASE_PCT)), min(L1, L2), target,
                     f"低價圈 W 底的右底 {L2:.2f} 附近止穩（頸線 {H:.2f}），提前布局，"
                     f"目標 = 頸線 + 震幅",
-                    "左側交易：還沒突破頸線，風險較高，跌破左底就要出場")
+                    "左側交易：還沒突破頸線，風險較高，跌破左底就要出場", "右底～右底 +3%")
     return None
 
 
@@ -174,10 +188,10 @@ def sig7_hs_bottom(x):
     nk, c = neck(x.n - 1), x.c[-1]
     if not (c > nk and x.c[-2] <= neck(x.n - 2) * 1.02 and x.vol_ok and c <= nk * 1.06):
         return None
-    return _sig("訊號7 頭肩底突破", "右側", c, lr, nk + (nk - lh),
+    return _sig("訊號7 頭肩底突破", "右側", brk_zone(nk), lr, nk + (nk - lh),
                 f"低價圈頭肩底：頭 {lh:.2f}、左右肩 {la:.2f} / {lr:.2f}，突破頸線 {nk:.2f}，"
                 f"量是均量 {x.vol_ratio:.1f} 倍；滿足點 = 頸線 + (頸線 − 頭)",
-                "課程提醒：頭部量大於左肩、右肩量縮後帶量突破更可靠")
+                "課程提醒：頭部量大於左肩、右肩量縮後帶量突破更可靠", ZN_BREAK)
 
 
 # ---------------------------------------------------------------
@@ -210,13 +224,13 @@ def sig4_triangle(x):
     if not (c > U and x.c[-2] <= up(x.n - 2) * 1.02 and x.vol_ok and c <= U * 1.06):
         return None
     top, bottom = x.h[-N:].max(), x.l[-N:].min()
-    short_t, long_t = c + (top - l2), c + (top - bottom)   # 課程：最高 − 最低 + 突破價
-    if short_t <= c:
+    short_t, long_t = U + (top - l2), U + (top - bottom)   # 課程：最高 − 最低 + 突破價（突破價 = 上緣 U）
+    if short_t <= U:
         return None
-    return _sig("訊號4 三角收斂突破", "右側", c, l2, short_t,
+    return _sig("訊號4 三角收斂突破", "右側", brk_zone(U), l2, short_t,
                 f"三角收斂整理後突破上緣 {U:.2f}，量是均量 {x.vol_ratio:.1f} 倍；"
                 f"短線目標 {short_t:.2f}、長線目標 {long_t:.2f}",
-                "課程建議新手買在突破，不要提前買在盤整低點")
+                "課程建議新手買在突破，不要提前買在盤整低點", ZN_BREAK)
 
 
 # ---------------------------------------------------------------
@@ -249,10 +263,10 @@ def sig10_flag(x):
         target = (top - start) + f_low                      # 振幅 + 整理低點
         if target <= c:
             continue
-        return _sig("訊號10 旗型突破", "右側", c, f_low, target,
+        return _sig("訊號10 旗型突破", "右側", brk_zone(brk), f_low, target,
                     f"旗型：先大漲 {(top - start) / start * 100:.0f}%（旗桿），"
                     f"再緩降整理 {x.n - 2 - t} 根後突破，量是均量 {x.vol_ratio:.1f} 倍；"
-                    f"滿足點 = 旗桿振幅 + 整理低點")
+                    f"滿足點 = 旗桿振幅 + 整理低點", zone_note=ZN_BREAK)
     return None
 
 
@@ -277,10 +291,10 @@ def sig3_narrow_box(x):
     c = x.c[-1]
     if not (c > hi and x.c[-2] <= hi * 1.02 and x.vol_ok and c <= hi * 1.06):
         return None
-    return _sig("訊號3 窄幅盤整突破", "右側", c, lw, hi + (hi - lw),
+    return _sig("訊號3 窄幅盤整突破", "右側", brk_zone(hi), lw, hi + (hi - lw),
                 f"窄幅盤整 {L}{p['unit']}（區間 {(hi - lw) / lw * 100:.0f}% 以內）後向上突破 {hi:.2f}，"
                 f"量是均量 {x.vol_ratio:.1f} 倍；盤整越久突破越可靠",
-                extra=f"盤整{L}")
+                extra=f"盤整{L}", zone_note=ZN_BREAK)
 
 
 # ---------------------------------------------------------------
@@ -295,10 +309,11 @@ def sig16_mirror(x):
     prior_high = x.h[-1 - N:-1].max()
     start = x.l[-1 - N:-1].min()                            # 起漲點
     if c > prior_high and x.c[-2] <= prior_high * 1.02 and x.vol_ok and c <= prior_high * 1.06:
-        amp = (c - start) / start                           # 震幅
-        return _sig("訊號16 鏡射突破前高", "右側", c, prior_high, c * (1 + amp),
+        amp = (prior_high - start) / start                  # 震幅（以突破點計）
+        return _sig("訊號16 鏡射突破前高", "右側", brk_zone(prior_high), prior_high, prior_high * (1 + amp),
                     f"突破近 {N}{p['unit']}高點 {prior_high:.2f}（創新高），量是均量 "
-                    f"{x.vol_ratio:.1f} 倍；目標 = 突破點 × (1 + 震幅 {amp * 100:.0f}%)")
+                    f"{x.vol_ratio:.1f} 倍；目標 = 突破點 × (1 + 震幅 {amp * 100:.0f}%)",
+                    zone_note=ZN_BREAK)
     # 突破後拉回：現價約在高點 ×0.85~0.93，且沒跌破原本的前高（防守）
     win = x.h[-M:]
     pk = int(np.argmax(win))
@@ -309,9 +324,10 @@ def sig16_mirror(x):
             and c >= old_high * 0.98 and c > x.c[-2]:
         pull_low = x.l[-M + pk:].min()
         amp = (peak - start2) / start2
-        return _sig("訊號16 鏡射拉回", "右側", c, min(pull_low, old_high), pull_low * (1 + amp),
+        return _sig("訊號16 鏡射拉回", "右側", (peak * 0.85, peak * 0.90), min(pull_low, old_high), pull_low * (1 + amp),
                     f"突破前高 {old_high:.2f} 後拉回到高點 {peak:.2f} 的 {c / peak * 100:.0f}%，"
-                    f"沒跌破防守且止穩；目標 = 拉回低點 × (1 + 震幅 {amp * 100:.0f}%)")
+                    f"沒跌破防守且止穩；目標 = 拉回低點 × (1 + 震幅 {amp * 100:.0f}%)",
+                    zone_note="高點 ×0.85～×0.90，課程的拉回可買點")
     return None
 
 
@@ -329,9 +345,10 @@ def sig9_gap_breakout(x):
         if low_after < x.h[g - 1] * 0.99:                   # 缺口被回補就不算
             continue
         if c > consol_high and c > x.c[-2] and x.vol_ok and c <= consol_high * 1.06:
-            return _sig("訊號9 跳空後突破", "右側", c, low_after, None,
+            return _sig("訊號9 跳空後突破", "右側", brk_zone(consol_high), low_after, None,
                         f"{x.n - 1 - g} 根前跳空大漲 {(x.o[g] / x.c[g - 1] - 1) * 100:.0f}%，"
-                        f"缺口未補、整理後再突破 {consol_high:.2f}，主力積極的強勢股")
+                        f"缺口未補、整理後再突破 {consol_high:.2f}，主力積極的強勢股",
+                        zone_note=ZN_BREAK)
     return None
 
 
@@ -353,10 +370,11 @@ def sig1_ma_pullback(x):
             continue
         d = (c / ma[-1] - 1) * 100
         if 0 <= d <= p["pullback_pct"]:
-            return _sig("訊號1 上漲回測均線", "右側", c, min(ma[-1], x.l[-3:].min()), None,
+            return _sig("訊號1 上漲回測均線", "右側", (ma[-1], ma[-1] * (1 + CHASE_PCT)), min(ma[-1], x.l[-3:].min()), None,
                         f"上漲趨勢中（站上 {slow}{p['unit']}線且向上）回測 {m}{p['unit']}均線，"
                         f"僅高於均線 {d:.1f}%",
-                        "出場：短均線與長均線死亡交叉，或收黑跌破均線")
+                        "出場：短均線與長均線死亡交叉，或收黑跌破均線；上漲趨勢中均線每天上移，掛單價可稍微上調",
+                        "均線～均線 +3%")
     return None
 
 
@@ -375,9 +393,9 @@ def sig12_capitulation(x):
     lower = min(o, c) - l
     if lower / rng < 0.5 or rng / c < p["hammer_range"] or x.vol_ratio < 2.0:
         return None
-    return _sig("訊號12 止跌長下影", "右側", c, l, None,
+    return _sig("訊號12 止跌長下影", "右側", (c, h), l, None,
                 f"下跌一段後出現大量（均量 {x.vol_ratio:.1f} 倍）長下影線，下方買盤湧現、賣壓有衰竭跡象",
-                "逆勢抄底，風險較高：隔天若跌破這根最低點就要出場")
+                "逆勢抄底，風險較高：隔天若跌破這根最低點就要出場", "今日收盤～今日最高，站穩再買")
 
 
 # ---------------------------------------------------------------
@@ -397,9 +415,9 @@ def sig19_false_breakdown(x):
     if not (broke and c > S * 1.005 and c > x.o[-1] and c > x.c[-2]):
         return None
     fake_low = x.l[-3:].min()
-    return _sig("訊號19 假跌破買進", "左側", c, fake_low, H + (H - S),
+    return _sig("訊號19 假跌破買進", "左側", (S * 1.005, c * 1.01), fake_low, H + (H - S),
                 f"跌破支撐 {S:.2f} 後隔天收回（破底失敗），目標 = 壓力 {H:.2f} + 震幅",
-                "左側交易：跌破這個假跌破低點要立刻停損")
+                "左側交易：跌破這個假跌破低點要立刻停損", "收回支撐上方～收盤 +1%")
 
 
 # 偵測順序 = 優先順序（越前面越優先）：突破型態 > 一般進場 > 左側
@@ -446,6 +464,6 @@ def build_trade(m, p):
     if m["target"] is not None and capped_from > target * 1.001:
         m = {**m, "reason": m["reason"] + f"；課程公式算出 {capped_from:.2f}"
                             f"（+{(capped_from / entry - 1) * 100:.0f}%），停利價保守限制在 +{MAX_TARGET_GAIN * 100:.0f}%"}
-    return {**m, "stop": stop, "target": target, "risk_pct": risk_pct,
+    return {**m, "zone_lo": m["zone"][0], "zone_hi": m["zone"][1], "stop": stop, "target": target, "risk_pct": risk_pct,
             "reward_pct": (target / entry - 1) * 100,
             "rr": (target - entry) / (entry - stop)}

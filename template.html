@@ -21,7 +21,13 @@ th,td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);whi
 th{font-size:12px;color:var(--muted);font-weight:600}
 th.l,td.l{text-align:left}
 tr:last-child td{border-bottom:0}
-table.picks{min-width:980px}
+table.picks{min-width:0}
+table.picks td{white-space:normal}
+table.picks td.reason{min-width:200px}
+table.picks td:nth-child(2){min-width:104px}
+table.picks td:nth-child(3){min-width:118px}
+table.picks td:nth-child(4){min-width:140px}
+.btn,.links{white-space:nowrap}
 .reason{white-space:normal;text-align:left;min-width:260px;color:var(--muted);font-size:13px}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin:1px 4px 1px 0;border:1px solid currentColor}
 .t-bull{color:var(--good)}.t-weak{color:var(--bad)}.t-hot{color:var(--warn)}.t-mute{color:var(--muted)}
@@ -69,6 +75,7 @@ details.fold summary::-webkit-details-marker{display:none}
 details.fold summary::before{content:'▸';display:inline-block;width:1.2em;color:var(--muted)}
 details.fold[open] summary::before{content:'▾'}
 details.fold summary .tag{margin-left:8px;font-weight:400;vertical-align:1px}
+.pos-in{color:var(--good)}.pos-above{color:var(--warn)}.pos-below{color:var(--muted)}
 .sigline{padding:4px 0}
 .sigline small{color:var(--muted);font-size:12px}
 table.multi{min-width:720px}
@@ -100,7 +107,7 @@ __MARKET__
 __MULTI__
 
 <h2>每日候選：可留意的買進標的</h2>
-<div class="sub">依「20 種買進訊號」在日線上偵測（成交金額前 150 名）。停損請以<b>收盤價</b>跌破為準；標「左側」的是提前布局，風險較高。</div>
+<div class="sub">依「20 種買進訊號」在日線上偵測（成交金額前 150 名）。「買進區間」依各訊號邏輯計算（例如突破價～+3%、均線～+3%），<b>不是昨天收盤價</b>；現價高於區間就不追，等回測。停損、停利以區間上緣計算，停損請以<b>收盤價</b>跌破為準；標「左側」的是提前布局，風險較高。</div>
 __DAILY__
 <h2>每週候選（週線，中期趨勢）</h2>
 <div class="sub">同一套訊號改用週線偵測，較適合抱久一點；週五收盤後的結果是整週完整資料。</div>
@@ -146,6 +153,7 @@ __WEEKLY__
   const signed = v => (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%';
   const dir = v => v > 0 ? 'up' : v < 0 ? 'down' : '';
   const LV = { buy: 't-bull', left: 't-hot', watch: 't-mute', avoid: 't-weak' };
+  const POS = { in: '現價在區間內', above: '現價高於區間，勿追', below: '現價低於區間，未到買點' };
   const LVNAME = { buy: '可留意買進', left: '左側觀察', watch: '觀望', avoid: '暫不買' };
   function toast(msg) {
     const t = $('toast'); t.textContent = msg; t.classList.add('show');
@@ -269,11 +277,11 @@ __WEEKLY__
       el('div', { class: 'verdict ' + LV[s.level] }, el('b', {}, LVNAME[s.level] + '：'), s.advice, ' ', ...s.tags.map(t => el('span', { class: 'tag t-mute' }, t)))
     ];
     if (s.sigs.length) {
-      const th = ['週期', '訊號', '買進價', '停損價', '停利價', '賺賠比', '理由'].map((h, i) => el('th', { class: i < 2 || i === 6 ? 'l' : '' }, h));
+      const th = ['週期', '訊號', '買進區間', '停損價', '停利價', '賺賠比', '理由'].map((h, i) => el('th', { class: i < 2 || i === 6 ? 'l' : '' }, h));
       const rows = s.sigs.map(g => el('tr', {},
         el('td', { class: 'l' }, g.tf),
         el('td', { class: 'l' }, g.name, g.side === '左側' ? el('span', { class: 'tag t-hot', style: 'margin-left:6px' }, '左側') : null),
-        el('td', {}, num(g.entry)),
+        el('td', {}, num(g.lo) + '～' + num(g.hi), el('br'), el('small', { class: 'pos-' + g.pos }, POS[g.pos])),
         el('td', { class: 'stopc' }, num(g.stop), el('br'), el('small', {}, '-' + g.risk + '%')),
         el('td', { class: 'tpc' }, num(g.target), el('br'), el('small', {}, '+' + g.gain + '%')),
         el('td', {}, String(g.rr)),

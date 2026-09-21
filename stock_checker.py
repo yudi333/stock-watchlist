@@ -59,6 +59,14 @@ def load_config():
 # ---------------------------------------------------------------
 # 2. 抓資料：先試上市 .TW，抓不到再試上櫃 .TWO
 # ---------------------------------------------------------------
+def drop_unfinished_today(df):
+    """盤中（台灣時間 14:00 前）Yahoo 會給「今天還沒收完」的 K 棒，量與價都不完整，會誤導判斷，直接不用。"""
+    now = pd.Timestamp.now(tz="Asia/Taipei")
+    if len(df) and df.index[-1].date() == now.date() and now.hour < 14:
+        return df.iloc[:-1]
+    return df
+
+
 def fetch_history(code):
     """回傳 (DataFrame, 使用的代號)；抓不到就丟出 ValueError。"""
     for suffix in (".TW", ".TWO"):
@@ -73,6 +81,7 @@ def fetch_history(code):
         df = df.dropna(subset=["Close"])
         # 台股週六日不開盤，但 Yahoo 偶爾會多給一列假資料，會讓漲跌與量比失真，直接剔除
         df = df[df.index.dayofweek < 5]
+        df = drop_unfinished_today(df)
         if not df.empty:
             return df, symbol
     raise ValueError("抓不到資料（.TW 與 .TWO 都失敗，請檢查代號或網路）")

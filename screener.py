@@ -1,7 +1,7 @@
 """
 選股器：每天（日線）與每週（週線）從「成交金額前 N 名」的股票中，
 用「20 種買進訊號」課程的邏輯（見 signals.py）挑出候選股，
-並算出 買進價 / 停損價 / 停利價 / 賺賠比 與白話理由。
+並算出 買進區間 / 停損價 / 停利價 / 賺賠比 與白話理由。
 
 只做資料分析，不會下單。結果僅供參考，不是投資建議。
 
@@ -18,7 +18,7 @@ import requests
 import yfinance as yf
 
 from signals import DETECTORS, RISK_REWARD, Ctx, build_trade, calc_kd
-from stock_checker import BASE_DIR, calc_rsi, judge, load_config
+from stock_checker import BASE_DIR, calc_rsi, drop_unfinished_today, judge, load_config
 
 # ---- 想調整就改這裡 ----
 UNIVERSE_SIZE = 150      # 掃描成交金額前幾名（上市 + 上櫃合計）
@@ -104,6 +104,14 @@ def get_universe():
 # ---------------------------------------------------------------
 # 2. 判斷單一檔：套用課程的訊號，符合就回傳結果 dict，不符合回傳 None
 # ---------------------------------------------------------------
+POS_TEXT = {"in": "現價在買進區間內", "above": "現價高於區間，勿追，等回測", "below": "現價低於區間，尚未到買點"}
+
+
+def position(close, lo, hi):
+    """現價相對於買進區間：in 區間內 / above 高於（別追）/ below 低於（還沒到）。"""
+    return "in" if lo <= close <= hi else "above" if close > hi else "below"
+
+
 def evaluate(df, p):
     """df：日線或週線資料；p：DAILY 或 WEEKLY 參數。"""
     if len(df) < p["min_bars"]:
@@ -163,15 +171,19 @@ def evaluate(df, p):
 
     bonus = 3 * aligned + 1 * kd_cross + 1 * (x.vol_ratio >= 1.5)
     is_left = main["side"] == "左側"
+    for t in matches:
+        t["pos"] = position(x.c[-1], t["zone_lo"], t["zone_hi"])
     return {
         "型態": main["signal"], "側別": main["side"], "收盤": round(x.c[-1], 2),
-        "買進價": round(main["entry"], 2), "停損價": round(main["stop"], 2),
+        "買進下限": round(main["zone_lo"], 2), "買進上限": round(main["zone_hi"], 2),
+        "現價位置": POS_TEXT[main["pos"]], "停損價": round(main["stop"], 2),
         "停利價": round(main["target"], 2), "風險%": round(main["risk_pct"], 1),
         "報酬%": round(main["reward_pct"], 1), "賺賠比": round(main["rr"], 1),
         "RSI": round(rsi), "量比": round(x.vol_ratio, 2),
         "距52週高%": round((x.c[-1] / high52 - 1) * 100, 1),
         "理由": "；".join([main["reason"]] + notes),
-        "_sort": is_left * 1000 + main["prio"] * 10 - bonus,   # 右側先、優先度高先、加分多先
+        # 右側先；現價在區間內的先於「高於區間」；優先度高先；加分多先
+        "_sort": is_left * 1000 + (main["pos"] != "in") * 200 + main["prio"] * 10 - bonus,
         "_matches": matches,
     }
 
@@ -191,6 +203,7 @@ def market_status():
     try:
         c = yf.Ticker("^TWII").history(period="1y")["Close"].dropna()
         c = c[c.index.dayofweek < 5]        # 剔除週末假資料
+        c = drop_unfinished_today(c.to_frame()).iloc[:, 0]   # 盤中不採用今天還沒收完的價格
         ma20, ma60 = c.rolling(20).mean().iloc[-1], c.rolling(60).mean().iloc[-1]
         if c.iloc[-1] > ma20 and c.iloc[-1] > ma60:
             text = "偏強：加權指數站上月線與季線，順勢操作機會較大"
@@ -214,7 +227,8 @@ def signal_rows(tf, res):
     """把 evaluate 的所有符合訊號轉成網頁用的簡單 dict。"""
     if not res:
         return []
-    return [dict(tf=tf, name=t["signal"], side=t["side"], entry=r2(t["entry"]), stop=r2(t["stop"]),
+    return [dict(tf=tf, name=t["signal"], side=t["side"], lo=r2(t["zone_lo"]), hi=r2(t["zone_hi"]), pos=t["pos"],
+                 stop=r2(t["stop"]),
                  target=r2(t["target"]), rr=round(t["rr"], 1), risk=round(t["risk_pct"], 1),
                  gain=round(t["reward_pct"], 1),
                  reason=t["reason"] + ("；" + t["extra"] if t["extra"] and not t["extra"].startswith("盤整") else ""))
@@ -245,6 +259,7 @@ def analyze_stock(item, df):
     """分析一檔：回傳 (網頁用紀錄, 日線結果, 週線結果)；資料不足回傳 None。"""
     df = df.dropna(subset=["Close"])
     df = df[df.index.dayofweek < 5]        # 剔除週末假資料
+    df = drop_unfinished_today(df)         # 盤中不採用今天還沒收完的 K 棒
     if len(df) < 130:
         return None                        # 上市不到半年，資料不足
     close = df["Close"]
@@ -322,12 +337,12 @@ def main():
         out = pd.DataFrame(picks).drop(columns=["_sort", "_matches"], errors="ignore")
         if out.empty:
             out = pd.DataFrame(columns=["代號", "名稱", "Yahoo代號", "資料日期", "型態", "側別", "收盤",
-                                        "買進價", "停損價", "停利價", "風險%", "報酬%", "賺賠比", "RSI", "量比",
+                                        "買進下限", "買進上限", "現價位置", "停損價", "停利價", "風險%", "報酬%", "賺賠比", "RSI", "量比",
                                         "距52週高%", "理由"])
         out.to_csv(BASE_DIR / f"candidates_{key}.csv", index=False, encoding="utf-8-sig")
         print(f"\n【{title}候選】{len(out)} 檔")
         for _, r in out.iterrows():
-            print(f"  {r['代號']} {r['名稱']}［{r['型態']}］買 {r['買進價']}  "
+            print(f"  {r['代號']} {r['名稱']}［{r['型態']}］買 {r['買進下限']}～{r['買進上限']}（{r['現價位置']}，收 {r['收盤']}）  "
                   f"停損 {r['停損價']}（-{r['風險%']}%）  停利 {r['停利價']}（+{r['報酬%']}%）  賺賠比 {r['賺賠比']}")
     if failed:
         print(f"\n[注意] {failed} 檔資料有問題，已略過。")

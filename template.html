@@ -81,6 +81,15 @@ details.fold summary .tag{margin-left:8px;font-weight:400;vertical-align:1px}
 table.multi{min-width:720px}
 table.multi td{vertical-align:top}
 td a[data-detail]{color:var(--accent);text-decoration:none;border-bottom:1px dotted}
+/* 同步 */
+.syncbox{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.syncbox .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.syncbox input[type=text],.syncbox textarea{flex:1;min-width:0;font:inherit;font-size:13px;padding:8px 10px;border-radius:8px;
+border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.syncbox textarea{width:100%;min-height:64px;resize:vertical}
+.syncbox h4{margin:0 0 2px;font-size:14px}
+.syncbox .hint{color:var(--muted);font-size:12px;margin:2px 0 0}
+.banner{border:1px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:color-mix(in srgb,var(--accent) 8%,var(--card))}
 /* 觀察清單：展開前幾天的紀錄 */
 .foldbtn{font:inherit;background:none;border:0;padding:0;color:inherit;cursor:pointer;text-align:left}
 .foldbtn:hover{color:var(--accent)}
@@ -111,6 +120,7 @@ __MARKET__
 <div id="detail"></div>
 
 <h2>我的觀察清單</h2>
+<div id="banner"></div>
 <div id="watch"></div>
 
 __MULTI__
@@ -147,6 +157,7 @@ __WEEKLY__
   let editing = false;
   const sel = new Set();
   const open = new Set();       // 目前展開前幾天紀錄的股票
+  let syncOpen = false;         // 「同步」面板是否展開
 
   // ---------- 小工具 ----------
   function el(tag, attrs, ...kids) {
@@ -199,6 +210,59 @@ __WEEKLY__
     });
   }
 
+  // ---------- 同步：用連結或文字在電腦與手機間搬清單（不經過任何伺服器）----------
+  const CODE_RE = /^[1-9]\d{3}$/;
+  function parseCodes(text) {
+    let t = String(text || '');
+    const i = t.indexOf('#w=');
+    if (i >= 0) t = t.slice(i + 3);
+    const seen = new Set();
+    return t.split(/[\s,，、;；]+/).filter(c => CODE_RE.test(c) && !seen.has(c) && seen.add(c)).slice(0, 200);
+  }
+  const syncUrl = () => location.href.split('#')[0] + '#w=' + watch.join(',');
+  function copyText(text, input) {
+    const done = ok => toast(ok ? '已複製' : '無法自動複製，請長按連結欄手動複製');
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => done(true), () => { input.select(); done(false); });
+    else { input.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (e) {} done(ok); }
+  }
+  function applyImport(codes, mode) {
+    watch = mode === 'replace' ? codes.slice() : [...watch, ...codes.filter(c => !watch.includes(c))];
+    sel.clear(); saveWatch();
+    if (location.hash.startsWith('#w=')) history.replaceState(null, '', location.pathname + location.search);
+    $('banner').replaceChildren(); refresh();
+    toast(`已${mode === 'replace' ? '取代為' : '合併，共'} ${watch.length} 檔`);
+  }
+  function renderBanner() {
+    const box = $('banner'); box.replaceChildren();
+    if (!location.hash.startsWith('#w=')) return;
+    const codes = parseCodes(location.hash);
+    if (!codes.length) return;
+    const fresh = codes.filter(c => !watch.includes(c)).length;
+    box.append(el('div', { class: 'banner' },
+      el('div', {}, el('b', {}, '偵測到同步連結：'), `含 ${codes.length} 檔，其中 ${fresh} 檔不在目前的觀察清單。`),
+      el('div', { class: 'hint', style: 'color:var(--muted);font-size:12px;margin-top:2px' }, '合併 = 保留目前的並加入新的；取代 = 用連結裡的清單覆蓋目前的。'),
+      el('div', { class: 'toolbar', style: 'margin:8px 0 0' },
+        el('button', { class: 'btn primary', onclick: () => applyImport(codes, 'merge') }, '合併'),
+        el('button', { class: 'btn', onclick: () => applyImport(codes, 'replace') }, '取代'),
+        el('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname + location.search); box.replaceChildren(); } }, '略過'))));
+  }
+  function syncPanel() {
+    const url = el('input', { type: 'text', readonly: 'readonly', value: syncUrl(), onclick: e => e.target.select() });
+    const ta = el('textarea', { placeholder: '貼上同步連結，或股票代號（用逗號、空白或換行分隔）' });
+    const imp = mode => { const c = parseCodes(ta.value); c.length ? applyImport(c, mode) : toast('沒有辨識到股票代號（要 4 碼數字）'); };
+    return el('div', { class: 'syncbox' },
+      el('h4', {}, '同步到另一台裝置'),
+      el('div', { class: 'hint' }, '把下面的連結傳到另一台（LINE、AirDrop、備忘錄都行），打開後選「合併」或「取代」。連結裡只有股票代號。'),
+      el('div', { class: 'row' }, url,
+        el('button', { class: 'btn primary', onclick: () => copyText(url.value, url) }, '複製連結'),
+        navigator.share ? el('button', { class: 'btn', onclick: () => navigator.share({ title: '我的台股觀察清單', url: url.value }).catch(() => {}) }, '分享') : null),
+      el('h4', { style: 'margin-top:14px' }, '從文字或連結匯入'),
+      el('div', { class: 'row' }, ta),
+      el('div', { class: 'row' },
+        el('button', { class: 'btn', onclick: () => imp('merge') }, '匯入（合併）'),
+        el('button', { class: 'btn', onclick: () => imp('replace') }, '匯入（取代）')));
+  }
+
   // ---------- 我的觀察清單 ----------
   const WD = ['日', '一', '二', '三', '四', '五', '六'];
   function histRows(s) {
@@ -224,6 +288,7 @@ __WEEKLY__
       const allOpen = watch.length && watch.every(c => open.has(c) || !BY[c]);
       bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔　·　最新 ${D.date}　·　點股票名稱展開前 6 個交易日${D.recorded && D.recorded.length ? `　·　已記錄 ${D.recorded.length} 天（自 ${D.recorded[0]}）` : ''}`),
                  el('button', { class: 'btn', onclick: () => { allOpen ? open.clear() : watch.forEach(c => open.add(c)); renderWatch(); } }, allOpen ? '全部收合' : '全部展開'),
+                 el('button', { class: 'btn' + (syncOpen ? ' primary' : ''), onclick: () => { syncOpen = !syncOpen; renderWatch(); } }, '同步'),
                  el('button', { class: 'btn', onclick: () => { editing = true; sel.clear(); renderWatch(); } }, '編輯'));
     } else {
       const all = watch.length && sel.size === watch.length;
@@ -233,6 +298,7 @@ __WEEKLY__
         el('button', { class: 'btn primary', onclick: () => { editing = false; sel.clear(); renderWatch(); } }, '完成'));
     }
     box.append(bar);
+    if (syncOpen && !editing) box.append(syncPanel());
     if (!watch.length) {
       box.append(el('div', { class: 'tablewrap' }, el('div', { class: 'empty' }, '清單是空的。用上方的搜尋欄找股票，按「加入觀察清單」。')));
     } else {
@@ -333,6 +399,8 @@ __WEEKLY__
     if (d) { e.preventDefault(); showDetail(d.dataset.detail); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
   refresh();
+  renderBanner();
+  window.addEventListener('hashchange', renderBanner);
   if (!D.stocks.length) $('detail').append(el('div', { class: 'detail' }, '今天的分析資料產生失敗，搜尋與觀察清單暫時無法使用，稍後再試。'));
 })();
 </script>

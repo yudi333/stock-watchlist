@@ -269,11 +269,11 @@ __WEEKLY__
   const ID_RE = /^[0-9a-f]{20,40}$/i;
   const GH = window.GH_API || 'https://api.github.com';
   let sw = loadSW();                    // {id, token, base, dirty}；null = 沒啟用
-  let cloudMsg = '', pushTimer = null;
+  let cloudMsg = '', pushTimer = null, tokenBad = false;   // tokenBad：token 過期或無效
   class Conflict extends Error { constructor(r) { super('雲端清單在別的裝置被修改過'); this.remote = r; } }
   function loadSW() { try { const v = JSON.parse(localStorage.getItem(SWKEY)); if (v && ID_RE.test(v.id || '')) return v; } catch (e) {} return null; }
   function saveSW() { try { sw ? localStorage.setItem(SWKEY, JSON.stringify(sw)) : localStorage.removeItem(SWKEY); } catch (e) {} }
-  const cloudLabel = () => cloudMsg || (sw && sw.token ? '已連線' : '唯讀');
+  const cloudLabel = () => (cloudMsg || (sw && sw.token ? '已連線' : '唯讀')) + (sw && sw.token && tokenBad ? '（token 已失效，請在「同步」面板更換）' : '');
   const cloudText = () => (sw ? '　·　雲端：' + cloudLabel() : '');
   function setCloud(msg) {
     cloudMsg = msg;
@@ -287,7 +287,11 @@ __WEEKLY__
     let res;
     try { res = await fetch(GH + path, { method, headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined }); }
     catch (e) { throw new Error('連不上 GitHub，請檢查網路'); }
-    if (res.status === 401) throw new Error('token 無效或已過期');
+    if (res.status === 401) {
+      if (token) tokenBad = true;
+      if (token && method === 'GET') return gh(path, { method, body, token: null });   // GitHub 連讀取也會拒絕壞掉的 token，改用不帶 token 的讀取
+      throw new Error('token 無效或已過期');
+    }
     if (res.status === 403) throw new Error('沒有權限，或次數已達上限（token 需要 gist 權限）');
     if (res.status === 404) throw new Error('找不到這份雲端清單（連結錯誤或已被刪除）');
     if (!res.ok) throw new Error('GitHub 回應錯誤 ' + res.status);
@@ -307,7 +311,7 @@ __WEEKLY__
     if (!force) { const r = await readRemote(sw.id); if (r.updated !== sw.base) throw new Conflict(r); }   // 先確認沒被別台改過，避免蓋掉
     const p = { v: 1, updated: Date.now(), codes: watch.slice() };
     await gh('/gists/' + sw.id, { method: 'PATCH', body: { files: { [GIST_FILE]: { content: JSON.stringify(p) } } } });
-    sw.base = p.updated; sw.dirty = false; saveSW();
+    sw.base = p.updated; sw.dirty = false; tokenBad = false; saveSW();
   }
   function markChanged() {                // 本機清單被修改後呼叫
     if (!sw) return;
@@ -383,9 +387,9 @@ __WEEKLY__
   async function setToken(token) {        // 只讀的裝置補貼 token，開啟修改
     token = String(token || '').trim();
     if (!token) return toast('請先貼上 token');
-    sw.token = token; saveSW();
-    try { await pushNow(); setCloud('已同步'); refresh(); toast('已設定 token，這台也能修改了'); }
-    catch (e) { if (e instanceof Conflict) { setCloud('有衝突'); showConflict(e.remote); refresh(); } else { sw.token = undefined; saveSW(); toast(e.message); } }
+    const old = sw.token; sw.token = token; saveSW();
+    try { await pushNow(); setCloud('已同步'); refresh(); toast(old ? '已更換 token' : '已設定 token，這台也能修改了'); }
+    catch (e) { if (e instanceof Conflict) { setCloud('有衝突'); showConflict(e.remote); refresh(); } else { sw.token = old; saveSW(); toast(e.message); } }
   }
   function stopCloud() { sw = null; saveSW(); setCloud(''); refresh(); toast('已停止雲端同步（清單仍保留在這台）'); }
   function route() { location.hash.startsWith('#g=') ? linkCloud() : renderBanner(); }
@@ -400,7 +404,7 @@ __WEEKLY__
         el('div', { class: 'hint' }, '手機只想看：不需要 token，打開電腦上啟用後產生的「固定連結」就會自動載入最新清單。'));
     }
     const link = el('input', { type: 'text', readonly: 'readonly', value: location.href.split('#')[0] + '#g=' + sw.id, onclick: e => e.target.select() });
-    const tk = el('input', { type: 'password', placeholder: '貼上 token，讓這台也能修改', autocomplete: 'off' });
+    const tk = el('input', { type: 'password', placeholder: sw.token ? '要更換 token 時貼在這裡（到期後重新建立）' : '貼上 token，讓這台也能修改', autocomplete: 'off' });
     return el('div', {},
       el('h4', {}, '雲端自動同步'),
       el('div', { class: 'hint' }, '狀態：', el('b', { class: 'cloudmsg-p' }, cloudLabel()), sw.token ? '（這台可修改，會自動上傳）' : '（這台只能讀取，在這裡的修改不會上傳）'),
@@ -411,7 +415,7 @@ __WEEKLY__
       el('div', { class: 'row' },
         el('button', { class: 'btn', onclick: () => syncOnLoad() }, '立即同步'),
         el('button', { class: 'btn', onclick: () => { if (confirm('停止雲端同步？這台的清單會保留，但不再與雲端連動。')) stopCloud(); } }, '停止雲端同步')),
-      sw.token ? null : el('div', { class: 'row' }, tk, el('button', { class: 'btn', onclick: () => setToken(tk.value) }, '設定 token')));
+      el('div', { class: 'row' }, tk, el('button', { class: 'btn', onclick: () => setToken(tk.value) }, sw.token ? '更換 token' : '設定 token')));
   }
 
   function syncPanel() {

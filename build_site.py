@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import history
 from stock_checker import load_config
 
 BASE_DIR = Path(__file__).parent
@@ -110,8 +111,19 @@ def main():
     except Exception:
         stocks = {"date": "-", "stocks": []}    # 選股失敗時仍產生網頁，搜尋會顯示提示
 
+    # 滾動紀錄：讀線上上一版的紀錄，加入今天，只留最近 7 個交易日；讀取失敗就中止，避免紀錄被蓋掉
+    try:
+        hist_file = history.update(history.load_previous(), stocks)
+    except RuntimeError as e:
+        print(f"[錯誤] {e}")
+        return 1
+    history.apply(stocks, hist_file)
+    (SITE_DIR / "history.json").write_text(
+        json.dumps(hist_file, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
     watchlist, _, _, _ = load_config()          # 預設的觀察清單（使用者在瀏覽器裡改的不會動到這裡）
-    data = {"date": stocks["date"], "stocks": stocks["stocks"], "default_watchlist": watchlist}
+    data = {"date": stocks["date"], "stocks": stocks["stocks"], "default_watchlist": watchlist,
+            "recorded": sorted(hist_file["days"])}
 
     market_html = ""
     try:
@@ -132,8 +144,9 @@ def main():
             .replace("__WEEKLY__", picks_table("candidates_weekly.csv"))
             .replace("__DATA__", data_json))
     (SITE_DIR / "index.html").write_text(page, encoding="utf-8")
-    print(f"已產生 {SITE_DIR.name}/index.html（{len(stocks['stocks'])} 檔可搜尋）")
+    print(f"已產生 {SITE_DIR.name}/index.html（{len(stocks['stocks'])} 檔可搜尋；已記錄 {len(hist_file['days'])} 天）")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

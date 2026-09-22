@@ -1,0 +1,55 @@
+# 盤中（週一到週五台灣時間約 9:12～13:42，每 30 分鐘）只更新報價，給「我的持股」檢查移動停損用。
+#
+# 跟 daily.yml（每天兩次的完整技術分析）分開：這裡只抓「現在價格」，不重算均線、RSI、
+# 訊號等，跑得快也影響範圍小；就算失敗，網頁的其他部分不受影響，持股只是暫時看不到
+# 盤中價格、退回顯示前一個交易日收盤。
+#
+# 做法：把目前已發布的網頁檔案抓下來（避免蓋掉），只加上/更新 quotes.json，再重新發布。
+name: intraday-quotes
+
+on:
+  schedule:
+    - cron: "12,42 1-5 * * 1-5"   # 台灣時間約 9:12 ~ 13:42，每 30 分鐘（收盤 13:30，最後一次抓到收盤價）
+  workflow_dispatch:
+
+concurrency:
+  group: pages   # 跟 daily.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install yfinance requests   # 輕量安裝，不需要 pandas/matplotlib
+      - name: 取回目前已發布的網頁檔案（避免這次發布把它們蓋掉）
+        run: |
+          mkdir -p site
+          for f in index.html history.json candidates_daily.csv candidates_weekly.csv market.json universe.json quotes.json; do
+            curl -fsSL "https://yudi333.github.io/stock-watchlist/$f?t=$(date +%s)" -o "site/$f" \
+              || echo "略過 $f（可能還沒發布過，正常現象）"
+          done
+      - run: python quotes.py site/quotes.json
+        continue-on-error: true   # 抓價失敗也要保留剛剛取回的舊網頁內容，不能讓網頁消失
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

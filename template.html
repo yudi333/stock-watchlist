@@ -225,32 +225,68 @@ __WEEKLY__
   }
 
 
-  // ---------- 我的持股：記錄買進、每天算趨勢與是否該賣 ----------
+  // ---------- 我的持股：記錄買進、每天算趨勢、移動停損／停利，是否該賣 ----------
   // 只存在這個瀏覽器（localStorage），不會上傳、不會公開，因為買進價與股數是敏感資料。
+  //
+  // 移動停損／停利（trailing stop）：出場點只跟著「買進後的最高價」往上調，不會往下調；
+  // 股價從最高點回落到設定的百分比就出場。跟固定停損停利不同：不會漲到某個目標價就急著
+  // 賣掉，而是讓獲利有機會繼續跑，同時保護已經賺到的部分。
+  // 參考：https://rich01.com/what-is-trailing-stop-0/（短線建議 3~10%、波段建議 10~20%）
   const HKEY = 'stock_watchlist_holdings_v1';
-  const RR = 2.0;   // 停利預設用「風險的 2 倍」，跟課程的賺賠比 2:1 一致（見 signals.py 的 RISK_REWARD）
+  const RR = 2.0;   // 「原始停利參考」用「風險的 2 倍」，跟課程的賺賠比 2:1 一致（僅供參考，不是強制出場點）
   function loadHoldings() { try { const v = JSON.parse(localStorage.getItem(HKEY)); if (Array.isArray(v)) return v; } catch (e) {} return []; }
   function saveHoldings() { try { localStorage.setItem(HKEY, JSON.stringify(holdings)); } catch (e) {} }
   let holdings = loadHoldings();
   let addingHolding = false;
   let pickedCode = null;   // 新增表單裡目前選到的股票代號
+  let LIVE = {}, LIVE_TIME = null;   // 盤中報價（quotes.json）；抓不到就沿用收盤價，不影響其他功能
 
-  function holdingStop(hd) { return hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100); }
-  function holdingTarget(hd) {
+  async function loadQuotes() {
+    try {
+      const r = await fetch('quotes.json?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      LIVE = d.prices || {}; LIVE_TIME = d.time || null;
+      if (holdings.length) renderHoldings();   // 换上盤中價格重新渲染
+    } catch (e) { /* 抓不到就用收盤價，這是正常情況（例如非交易時段），不用提示 */ }
+  }
+  function currentPrice(hd, s) {
+    const live = LIVE[hd.code];
+    return live != null ? live : (s ? s.close : null);
+  }
+  function peakOf(hd) { return hd.peak != null ? Math.max(hd.peak, hd.buyPrice) : hd.buyPrice; }
+  function updatePeak(hd, s) {   // 用現有資料把「買進後最高價」補到最新：今天現價 + 最近 6 個交易日的歷史高點
+    let m = peakOf(hd);
+    if (s) {
+      const c = currentPrice(hd, s);
+      if (c != null && c > m) m = c;
+      (s.hist || []).forEach(h => { if (h.d >= hd.buyDate && h.c > m) m = h.c; });
+    }
+    if (m !== hd.peak) { hd.peak = m; return true; }
+    return false;
+  }
+  function holdingStop(hd) {
+    if (hd.stopPrice != null) return hd.stopPrice;      // 使用者自訂固定停損價：不追蹤最高價
+    return peakOf(hd) * (1 - hd.stopPct / 100);          // 移動停損：跟著最高價往上調
+  }
+  function holdingTarget(hd) {   // 原始停利參考價：用「買進當時」的風險算，不會跟著移動停損一起變動
     if (hd.targetPrice != null) return hd.targetPrice;
-    const stop = holdingStop(hd);
-    return hd.buyPrice + (hd.buyPrice - stop) * RR;
+    const initialStop = hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100);
+    return hd.buyPrice + (hd.buyPrice - initialStop) * RR;
   }
   function holdingVerdict(hd, s) {
     if (!s) return { cls: 'st-hold', text: '查無資料（可能已下市或代號有誤）' };
-    const stop = holdingStop(hd), target = holdingTarget(hd), c = s.close;
-    if (c <= stop) return { cls: 'st-stop', text: `達停損：收盤 ${num(c)} ≤ 停損價 ${num(stop)}，建議賣出` };
-    if (c >= target) return { cls: 'st-target', text: `達停利：收盤 ${num(c)} ≥ 停利價 ${num(target)}，建議賣出或往上移動停損` };
-    if (s.tags.includes('轉弱，暫不買')) return { cls: 'st-weak', text: '季線已轉弱，尚未觸及停損，留意風險、可考慮收緊停損' };
-    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: '短線過熱，尚未觸及停利，留意拉回風險' };
-    return { cls: 'st-hold', text: '續抱：介於停損與停利之間' };
+    const stop = holdingStop(hd), refTarget = holdingTarget(hd), peak = peakOf(hd);
+    const c = currentPrice(hd, s), locked = peak > hd.buyPrice;
+    if (c <= stop) return { cls: 'st-stop', text: locked
+      ? `觸及移動停損：現價 ${num(c)} ≤ 移動停損 ${num(stop)}（最高 ${num(peak)} 回落 ${hd.stopPct}%），建議賣出`
+      : `達停損：現價 ${num(c)} ≤ 停損價 ${num(stop)}，建議賣出` };
+    if (s.tags.includes('轉弱，暫不買')) return { cls: 'st-weak', text: '季線已轉弱，尚未觸及停損，留意風險、可考慮收緊停損 %' };
+    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: '短線過熱，留意拉回；股價再創高時移動停損會自動上移' };
+    if (c >= refTarget) return { cls: 'st-target', text: `已達原始停利參考 ${num(refTarget)}：移動停損已上移到 ${num(stop)}，可依紀律賣出，或續抱讓移動停損保護獲利` };
+    return { cls: 'st-hold', text: locked ? `續抱：移動停損已上移到 ${num(stop)}（最高 ${num(peak)}）` : `續抱：介於停損 ${num(stop)} 與停利參考 ${num(refTarget)} 之間` };
   }
-  function addHolding(hd) { holdings.push(hd); saveHoldings(); addingHolding = false; pickedCode = null; renderHoldings(); toast('已記錄買進'); }
+  function addHolding(hd) { holdings.push({ peak: hd.buyPrice, ...hd }); saveHoldings(); addingHolding = false; pickedCode = null; renderHoldings(); toast('已記錄買進'); }
   function removeHolding(id) {
     if (!confirm('確定刪除這筆持股紀錄？（不是賣出下單，只是刪除記錄）')) return;
     holdings = holdings.filter(h => h.id !== id); saveHoldings(); renderHoldings();
@@ -302,17 +338,23 @@ __WEEKLY__
   }
   function renderHoldings() {
     const box = $('holdings'); box.replaceChildren();
-    box.append(el('div', { class: 'toolbar' }, el('span', { class: 'grow' }, `共 ${holdings.length} 筆`)));
+    const live = LIVE_TIME ? `　·　盤中報價 ${LIVE_TIME}` : '';
+    box.append(el('div', { class: 'toolbar' }, el('span', { class: 'grow' }, `共 ${holdings.length} 筆${live}`)));
     if (holdings.length) {
-      const head = el('tr', {}, ...['代號', '名稱', '買進日期', '買進價', '現價', '損益', '停損價', '停利價'].map(t => el('th', { class: ['代號', '名稱'].includes(t) ? 'l' : '' }, t)),
+      let changed = false;
+      holdings.forEach(hd => { if (updatePeak(hd, BY[hd.code])) changed = true; });
+      if (changed) saveHoldings();
+      const head = el('tr', {}, ...['代號', '名稱', '買進日期', '買進價', '最高價', '現價', '損益', '移動停損', '停利參考'].map(t => el('th', { class: ['代號', '名稱'].includes(t) ? 'l' : '' }, t)),
         el('th', { class: 'l' }, '趨勢與建議'), el('th', { class: 'l' }, ''));
       const rows = holdings.map(hd => {
         const s = BY[hd.code], stop = holdingStop(hd), target = holdingTarget(hd), v = holdingVerdict(hd, s);
-        const pnl = s ? (s.close / hd.buyPrice - 1) * 100 : null;
+        const c = currentPrice(hd, s), isLive = LIVE[hd.code] != null;
+        const pnl = c == null ? null : (c / hd.buyPrice - 1) * 100;
         return el('tr', { class: v.cls === 'st-stop' ? 'row-stop' : '' },
           el('td', { class: 'l' }, hd.code), el('td', { class: 'l' }, s ? s.name : '？'),
-          el('td', {}, hd.buyDate), el('td', {}, num(hd.buyPrice)),
-          el('td', {}, s ? num(s.close) : '—'), el('td', { class: pnl == null ? '' : dir(pnl) }, pnl == null ? '—' : signed(pnl)),
+          el('td', {}, hd.buyDate), el('td', {}, num(hd.buyPrice)), el('td', {}, num(peakOf(hd))),
+          el('td', {}, c == null ? '—' : num(c), el('br'), el('small', { style: 'color:var(--muted)' }, isLive ? '盤中' : '收盤')),
+          el('td', { class: pnl == null ? '' : dir(pnl) }, pnl == null ? '—' : signed(pnl)),
           el('td', { class: 'stopc' }, num(stop)), el('td', { class: 'tpc' }, num(target)),
           el('td', { class: 'l' },
             el('div', { class: 'hstatus ' + v.cls }, v.text),
@@ -691,6 +733,7 @@ __WEEKLY__
   });
   refresh();
   renderHoldings();
+  loadQuotes();
   route();
   if (sw && !(location.hash.startsWith('#g=') && location.hash.slice(3) !== sw.id)) syncOnLoad();
   window.addEventListener('hashchange', route);

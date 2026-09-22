@@ -125,6 +125,10 @@ def main():
     data = {"date": stocks["date"], "stocks": stocks["stocks"], "default_watchlist": watchlist,
             "recorded": sorted(hist_file["days"])}
 
+    # 給盤中報價用的輕量清單（只有代號和市場別），讓 quotes.py 不用下載整份 stocks.json
+    universe = [{"code": s["code"], "mkt": s["mkt"]} for s in stocks["stocks"]]
+    (SITE_DIR / "universe.json").write_text(json.dumps(universe, separators=(",", ":")), encoding="utf-8")
+
     market_html = ""
     try:
         m = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))

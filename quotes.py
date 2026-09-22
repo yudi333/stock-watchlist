@@ -19,6 +19,7 @@
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -96,7 +97,10 @@ def main():
         print(f"鉅亨網缺 {len(missing)} 檔，改用 Yahoo 分鐘線補齊...")
         prices.update(fetch_via_yahoo(missing))
 
-    payload = {"time": time.strftime("%H:%M"), "prices": prices}
+    # GitHub Actions 的伺服器用 UTC 時間，time.strftime 會抓到 UTC，跟台灣時間差 8 小時，
+    # 網頁上顯示「盤中 HH:MM」才不會誤導成台灣時間
+    now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
+    payload = {"time": now, "prices": prices}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     print(f"已存 {out_path.name}：{len(prices)}/{len(pairs)} 檔（{payload['time']}）")

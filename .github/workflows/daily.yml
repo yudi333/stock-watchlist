@@ -34,7 +34,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: requirements-ci.txt
+      - run: pip install -r requirements-ci.txt   # 精簡版：不裝 matplotlib（畫圖只有本機用得到），跑快一點
       - run: python screener.py
         continue-on-error: true   # 選股失敗也要讓網頁照常更新（搜尋會顯示提示）
       - run: python build_site.py

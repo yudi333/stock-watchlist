@@ -12,9 +12,6 @@ import sys
 import unicodedata
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")  # 只存圖、不開視窗（這樣在沒有螢幕的環境也能跑）
-import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 import yfinance as yf
@@ -29,12 +26,20 @@ HOT_DAILY_GAIN = 0.07   # 單日漲幅超過 7% 算過熱
 HOT_RSI = 75            # RSI 超過 75 算過熱
 MA60_LOOKBACK = 5       # 季線方向：和幾天前比
 
-# 中文字型：依序找電腦上有的第一個（Mac / Windows / Linux 都涵蓋）
-plt.rcParams["font.sans-serif"] = [
-    "PingFang TC", "Heiti TC", "Microsoft JhengHei", "Noto Sans CJK TC",
-    "Arial Unicode MS", "DejaVu Sans",
-]
-plt.rcParams["axes.unicode_minus"] = False
+# matplotlib 只有畫圖（plot_chart）才用得到，且是比較重的套件，改成用到才載入：
+# screener.py／build_site.py 這些自動更新的流程只是共用這裡的計算函式，不畫圖，
+# 這樣它們就不用安裝 matplotlib，GitHub Actions 的 pip install 步驟能跑快一點。
+def _init_matplotlib():
+    import matplotlib
+    matplotlib.use("Agg")  # 只存圖、不開視窗（這樣在沒有螢幕的環境也能跑）
+    import matplotlib.pyplot as plt
+    # 中文字型：依序找電腦上有的第一個（Mac / Windows / Linux 都涵蓋）
+    plt.rcParams["font.sans-serif"] = [
+        "PingFang TC", "Heiti TC", "Microsoft JhengHei", "Noto Sans CJK TC",
+        "Arial Unicode MS", "DejaVu Sans",
+    ]
+    plt.rcParams["axes.unicode_minus"] = False
+    return plt
 
 
 # ---------------------------------------------------------------
@@ -181,6 +186,7 @@ def analyze(code, name, holding, stop_loss):
 # 5. 畫 K 線圖（含 5/20/60MA 與成交量）
 # ---------------------------------------------------------------
 def plot_chart(df, r):
+    plt = _init_matplotlib()  # 第一次呼叫才載入 matplotlib
     UP, DOWN = "#d6336c", "#2f9e6b"  # 台股慣例：紅漲綠跌
     MA_COLORS = {"MA5": "#f59f00", "MA20": "#1c7ed6", "MA60": "#7048e8"}
 

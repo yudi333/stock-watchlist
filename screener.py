@@ -19,7 +19,7 @@ import requests
 import yfinance as yf
 
 import institutional
-from signals import DETECTORS, RISK_REWARD, Ctx, build_trade, calc_kd
+from signals import DETECTORS, Ctx, build_trade, calc_kd
 from stock_checker import BASE_DIR, calc_rsi, drop_unfinished_today, judge, load_config
 
 # ---- 想調整就改這裡 ----
@@ -354,10 +354,14 @@ def main():
     results = {"daily": [], "weekly": []}
     records, data_date, failed = [], "", 0
     CHUNK = 100                             # 分批下載，避免一次要太多被擋
+    # 19 個月：週線訊號需要至少 70 根週線（WEEKLY 的 min_bars），換算回日線要接近 1.5 年
+    # 才夠（15 個月試過只有 65 週會不夠，週線候選整批消失，用 19 個月留了安全緩衝）；
+    # 比原本抓 2 年少約 2 成資料量，下載和分析都跟著變快，同時保留兩種週期的訊號結果
+    FETCH_PERIOD = "19mo"
     for i in range(0, len(stocks), CHUNK):
         part = stocks[i:i + CHUNK]
         try:
-            data = yf.download([s["sym"] for s in part], period="2y", auto_adjust=False,
+            data = yf.download([s["sym"] for s in part], period=FETCH_PERIOD, auto_adjust=False,
                                group_by="ticker", progress=False, threads=True)
         except Exception as e:
             print(f"[注意] 第 {i // CHUNK + 1} 批下載失敗：{e}")

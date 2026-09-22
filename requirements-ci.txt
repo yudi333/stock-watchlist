@@ -1,0 +1,7 @@
+# 給 GitHub Actions（daily.yml）用的精簡版：只裝 screener.py／build_site.py 真正需要的套件。
+# matplotlib 只有本機執行 stock_checker.py 畫 K 線圖才需要，自動更新流程用不到，
+# 不裝可以讓每次執行的 pip install 步驟快一點。本機完整安裝請用 requirements.txt。
+yfinance>=0.2.40
+pandas>=1.5
+PyYAML>=6.0
+requests>=2.28

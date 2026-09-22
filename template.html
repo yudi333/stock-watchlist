@@ -113,6 +113,19 @@ tr.child td:first-child{border-left:3px solid var(--accent)}
 tr.child small{font-size:11px}
 .t-rec{color:var(--accent)}
 .hsig{font-size:12px;color:var(--muted);white-space:normal;margin-top:2px}
+/* 持股 */
+.hstatus{padding:8px 10px;border-radius:8px;font-size:13px;border:1px solid currentColor;display:inline-block}
+.hstatus.st-stop{background:var(--stopbg);color:var(--stop);border-color:var(--stopbg)}
+.hstatus.st-target{color:var(--good)}
+.hstatus.st-weak{color:var(--warn)}
+.hstatus.st-hold{color:var(--muted)}
+tr.row-stop{background:color-mix(in srgb,var(--bad) 8%,transparent)}
+.hform{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:8px}
+.hform label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
+.hform input{width:100%;font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.hpick{position:relative}
+.hpick .results{position:absolute;left:0;right:0;top:100%;z-index:5}
+.hclose{color:var(--muted);text-decoration:none;font-size:12px}
 /* 觀察清單編輯 */
 td.chk,th.chk{width:36px;padding-right:0;text-align:center}
 tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
@@ -132,6 +145,10 @@ __MARKET__
   <div id="results" class="results" hidden></div>
 </div>
 <div id="detail"></div>
+
+<h2>我的持股</h2>
+<div class="sub">記錄買進日期與價格，每天依最新資料算出趨勢，以及是否達停損／停利。<b>只存在這個瀏覽器</b>，不會上傳或公開。</div>
+<div id="holdings"></div>
 
 <h2>我的觀察清單</h2>
 <div id="banner"></div>
@@ -205,6 +222,106 @@ __WEEKLY__
     const out = [el('span', { class: 'tag ' + LV[s.level] }, LVNAME[s.level])];
     s.tags.forEach(t => out.push(el('span', { class: 'tag t-mute' }, t)));
     return out;
+  }
+
+
+  // ---------- 我的持股：記錄買進、每天算趨勢與是否該賣 ----------
+  // 只存在這個瀏覽器（localStorage），不會上傳、不會公開，因為買進價與股數是敏感資料。
+  const HKEY = 'stock_watchlist_holdings_v1';
+  const RR = 2.0;   // 停利預設用「風險的 2 倍」，跟課程的賺賠比 2:1 一致（見 signals.py 的 RISK_REWARD）
+  function loadHoldings() { try { const v = JSON.parse(localStorage.getItem(HKEY)); if (Array.isArray(v)) return v; } catch (e) {} return []; }
+  function saveHoldings() { try { localStorage.setItem(HKEY, JSON.stringify(holdings)); } catch (e) {} }
+  let holdings = loadHoldings();
+  let addingHolding = false;
+  let pickedCode = null;   // 新增表單裡目前選到的股票代號
+
+  function holdingStop(hd) { return hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100); }
+  function holdingTarget(hd) {
+    if (hd.targetPrice != null) return hd.targetPrice;
+    const stop = holdingStop(hd);
+    return hd.buyPrice + (hd.buyPrice - stop) * RR;
+  }
+  function holdingVerdict(hd, s) {
+    if (!s) return { cls: 'st-hold', text: '查無資料（可能已下市或代號有誤）' };
+    const stop = holdingStop(hd), target = holdingTarget(hd), c = s.close;
+    if (c <= stop) return { cls: 'st-stop', text: `達停損：收盤 ${num(c)} ≤ 停損價 ${num(stop)}，建議賣出` };
+    if (c >= target) return { cls: 'st-target', text: `達停利：收盤 ${num(c)} ≥ 停利價 ${num(target)}，建議賣出或往上移動停損` };
+    if (s.tags.includes('轉弱，暫不買')) return { cls: 'st-weak', text: '季線已轉弱，尚未觸及停損，留意風險、可考慮收緊停損' };
+    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: '短線過熱，尚未觸及停利，留意拉回風險' };
+    return { cls: 'st-hold', text: '續抱：介於停損與停利之間' };
+  }
+  function addHolding(hd) { holdings.push(hd); saveHoldings(); addingHolding = false; pickedCode = null; renderHoldings(); toast('已記錄買進'); }
+  function removeHolding(id) {
+    if (!confirm('確定刪除這筆持股紀錄？（不是賣出下單，只是刪除記錄）')) return;
+    holdings = holdings.filter(h => h.id !== id); saveHoldings(); renderHoldings();
+  }
+  function stockPicker(onPick) {
+    const inp = el('input', { type: 'text', placeholder: '輸入代號或名稱', autocomplete: 'off' });
+    const box = el('div', { class: 'results', hidden: true });
+    inp.addEventListener('input', () => {
+      const q = inp.value.trim().toLowerCase();
+      box.replaceChildren(); box.hidden = !q;
+      if (!q) return;
+      const hits = D.stocks.filter(s => s.code.startsWith(q) || s.name.toLowerCase().includes(q)).slice(0, 6);
+      if (!hits.length) { box.append(el('div', { class: 'msg' }, '找不到符合的股票')); return; }
+      hits.forEach(s => box.append(el('button', { onclick: () => { onPick(s); box.hidden = true; inp.value = ''; } },
+        el('span', { class: 'code' }, s.code), el('span', {}, s.name))));
+    });
+    return el('div', { class: 'hpick' }, inp, box);
+  }
+  function holdingForm() {
+    if (!addingHolding) return el('button', { class: 'btn primary', onclick: () => { addingHolding = true; renderHoldings(); } }, '＋ 記錄一筆買進');
+    const today = new Date().toISOString().slice(0, 10);
+    const date = el('input', { type: 'date', value: today, max: today });
+    const price = el('input', { type: 'number', step: '0.01', min: '0', placeholder: '例如 120.5' });
+    const shares = el('input', { type: 'number', step: '1', min: '0', placeholder: '選填' });
+    const stopPct = el('input', { type: 'number', step: '0.5', min: '1', max: '50', value: '8' });
+    const target = el('input', { type: 'number', step: '0.01', min: '0', placeholder: '留空 = 自動算（風險×2）' });
+    const picked = el('div', { class: 'sub', style: 'margin:0' }, pickedCode ? `已選：${pickedCode.code} ${pickedCode.name}` : '尚未選擇股票');
+    const submit = () => {
+      if (!pickedCode) return toast('請先選擇股票');
+      const bp = parseFloat(price.value);
+      if (!(bp > 0)) return toast('請輸入正確的買進價');
+      const sp = parseFloat(stopPct.value);
+      addHolding({ id: Date.now() + '-' + pickedCode.code, code: pickedCode.code, buyDate: date.value || today,
+        buyPrice: bp, shares: shares.value ? Number(shares.value) : null,
+        stopPct: sp > 0 ? sp : 8, stopPrice: null, targetPrice: target.value ? parseFloat(target.value) : null });
+    };
+    return el('div', { class: 'syncbox' },
+      el('h4', {}, '記錄一筆買進'),
+      el('div', { class: 'row' }, stockPicker(s => { pickedCode = s; picked.textContent = `已選：${s.code} ${s.name}`; }), picked),
+      el('div', { class: 'hform' },
+        el('div', {}, el('label', {}, '買進日期'), date),
+        el('div', {}, el('label', {}, '買進價'), price),
+        el('div', {}, el('label', {}, '股數（選填）'), shares),
+        el('div', {}, el('label', {}, '停損 %'), stopPct),
+        el('div', {}, el('label', {}, '停利價（選填）'), target)),
+      el('div', { class: 'row', style: 'margin-top:10px' },
+        el('button', { class: 'btn primary', onclick: submit }, '確認記錄'),
+        el('button', { class: 'btn', onclick: () => { addingHolding = false; pickedCode = null; renderHoldings(); } }, '取消')));
+  }
+  function renderHoldings() {
+    const box = $('holdings'); box.replaceChildren();
+    box.append(el('div', { class: 'toolbar' }, el('span', { class: 'grow' }, `共 ${holdings.length} 筆`)));
+    if (holdings.length) {
+      const head = el('tr', {}, ...['代號', '名稱', '買進日期', '買進價', '現價', '損益', '停損價', '停利價'].map(t => el('th', { class: ['代號', '名稱'].includes(t) ? 'l' : '' }, t)),
+        el('th', { class: 'l' }, '趨勢與建議'), el('th', { class: 'l' }, ''));
+      const rows = holdings.map(hd => {
+        const s = BY[hd.code], stop = holdingStop(hd), target = holdingTarget(hd), v = holdingVerdict(hd, s);
+        const pnl = s ? (s.close / hd.buyPrice - 1) * 100 : null;
+        return el('tr', { class: v.cls === 'st-stop' ? 'row-stop' : '' },
+          el('td', { class: 'l' }, hd.code), el('td', { class: 'l' }, s ? s.name : '？'),
+          el('td', {}, hd.buyDate), el('td', {}, num(hd.buyPrice)),
+          el('td', {}, s ? num(s.close) : '—'), el('td', { class: pnl == null ? '' : dir(pnl) }, pnl == null ? '—' : signed(pnl)),
+          el('td', { class: 'stopc' }, num(stop)), el('td', { class: 'tpc' }, num(target)),
+          el('td', { class: 'l' },
+            el('div', { class: 'hstatus ' + v.cls }, v.text),
+            s ? el('div', { style: 'margin-top:6px' }, tagsOf(s), ' ', links(s)) : null),
+          el('td', { class: 'l' }, el('a', { href: '#', class: 'hclose', onclick: e => { e.preventDefault(); removeHolding(hd.id); } }, '刪除')));
+      });
+      box.append(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, head), el('tbody', {}, rows))));
+    }
+    box.append(holdingForm());
   }
 
   // ---------- 加入 / 移除 ----------
@@ -573,6 +690,7 @@ __WEEKLY__
     if (d) { e.preventDefault(); showDetail(d.dataset.detail); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
   refresh();
+  renderHoldings();
   route();
   if (sw && !(location.hash.startsWith('#g=') && location.hash.slice(3) !== sw.id)) syncOnLoad();
   window.addEventListener('hashchange', route);

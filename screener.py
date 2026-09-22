@@ -12,11 +12,13 @@
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
 import yfinance as yf
 
+import institutional
 from signals import DETECTORS, RISK_REWARD, Ctx, build_trade, calc_kd
 from stock_checker import BASE_DIR, calc_rsi, drop_unfinished_today, judge, load_config
 
@@ -199,7 +201,9 @@ def to_weekly(df):
 # 3. 主程式
 # ---------------------------------------------------------------
 def market_status():
-    """大盤（加權指數）強弱：課程提醒「大盤在漲時，個股漲的機會較大」。寫入 market.json 給網頁用。"""
+    """大盤（加權指數）強弱：課程提醒「大盤在漲時，個股漲的機會較大」。寫入 market.json 給網頁用。
+    回傳實際的交易日期（給 fetch_institutional_notes 用，比系統時鐘準——排程萬一延遲跨到隔天，
+    系統日期就會跟股票資料所屬的交易日對不上）；抓不到就回傳 None。"""
     try:
         c = yf.Ticker("^TWII").history(period="1y")["Close"].dropna()
         c = c[c.index.dayofweek < 5]        # 剔除週末假資料
@@ -211,12 +215,34 @@ def market_status():
             text = "中性：加權指數在季線之上但跌破月線，進場宜保守"
         else:
             text = "偏弱：加權指數跌破季線，個股上漲機會較小，買進請更保守"
-        info = {"date": c.index[-1].strftime("%Y-%m-%d"), "close": round(float(c.iloc[-1]), 2),
+        date = c.index[-1].strftime("%Y-%m-%d")
+        info = {"date": date, "close": round(float(c.iloc[-1]), 2),
                 "ma20": round(float(ma20), 2), "ma60": round(float(ma60), 2), "text": text}
         (BASE_DIR / "market.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
         print(f"大盤：{text}")
+        return date
     except Exception as e:
         print(f"[注意] 抓不到大盤資料：{e}")
+        return None
+
+
+def fetch_institutional_notes(trade_date):
+    """三大法人買賣超（加分項，抓不到就回傳 {}，不影響其他任何功能）。
+    讀線上滾動紀錄 → 併入今天 → 存回 BASE_DIR（build_site.py 會複製到 site/ 供下次讀取）→
+    算出連續買賣超天數的提示文字。trade_date：實際交易日（來自 market_status()），
+    比系統時鐘準——不然排程萬一延遲跨到隔天，系統日期就會跟股票資料對不上。"""
+    today = trade_date or datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    try:
+        today_data = institutional.fetch_today(today)
+        rolling = institutional.update_rolling(institutional.load_rolling(), today, today_data)
+        (BASE_DIR / "inst_history.json").write_text(
+            json.dumps(rolling, separators=(",", ":")), encoding="utf-8")
+        notes = institutional.compute_notes(rolling, today)
+        print(f"三大法人買賣超：今天抓到 {len(today_data)} 檔，{len(notes)} 檔連續買／賣超達提示門檻")
+        return notes
+    except Exception as e:
+        print(f"[注意] 三大法人資料處理失敗（不影響其他功能）：{e}")
+        return {}
 
 
 def r2(v):
@@ -279,8 +305,9 @@ def snapshot(df):
     return core, rd, rw
 
 
-def analyze_stock(item, df):
-    """分析一檔：回傳 (網頁用紀錄, 日線結果, 週線結果, 資料日期)；資料不足回傳 None。"""
+def analyze_stock(item, df, inst_notes=None):
+    """分析一檔：回傳 (網頁用紀錄, 日線結果, 週線結果, 資料日期)；資料不足回傳 None。
+    inst_notes：{代號: "三大法人連買超 N 天"} 這種加分提示，只套用在「今天」，不影響歷史回看。"""
     df = df.dropna(subset=["Close"])
     df = df[df.index.dayofweek < 5]        # 剔除週末假資料
     df = drop_unfinished_today(df)         # 盤中不採用今天還沒收完的 K 棒
@@ -288,6 +315,12 @@ def analyze_stock(item, df):
         return None                        # 上市不到半年，資料不足
     core, rd, rw = snapshot(df)
     date = core.pop("date")
+    note = (inst_notes or {}).get(item["code"])
+    if note:
+        core["tags"] = core["tags"] + [note]           # 一般標籤（觀察清單／持股都看得到）
+        for r in (rd, rw):
+            if r:
+                r["理由"] += "；" + note                 # 候選股與搜尋結果的理由欄
     rec = dict(code=item["code"], name=item["name"], mkt=item["mkt"], **core)
 
     # 前 HIST_DAYS 個交易日：回到當天重新判斷一次（用精簡欄位，減少網頁大小）
@@ -314,7 +347,8 @@ def main():
     # 候選股只從「成交金額前 N 名」挑（流動性夠），並排除你已在觀察的
     ranked = sorted((s for s in stocks if s["price"] >= MIN_PRICE), key=lambda s: s["value"], reverse=True)
     liquid = {s["code"] for s in ranked[:UNIVERSE_SIZE]} - set(watchlist)
-    market_status()
+    trade_date = market_status()
+    inst_notes = fetch_institutional_notes(trade_date)
     print(f"分析全部 {len(stocks)} 檔（候選股從成交金額前 {UNIVERSE_SIZE} 名挑，{len(liquid)} 檔）...")
 
     results = {"daily": [], "weekly": []}
@@ -331,7 +365,7 @@ def main():
             continue
         for item in part:
             try:
-                out = analyze_stock(item, data[item["sym"]])
+                out = analyze_stock(item, data[item["sym"]], inst_notes)
                 if not out:
                     continue
                 rec, rd, rw, date = out

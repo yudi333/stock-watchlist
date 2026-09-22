@@ -10,3 +10,4 @@ candidates_*.csv
 market.json
 stocks.json
 message.txt
+inst_history.json

@@ -129,6 +129,12 @@ def main():
     universe = [{"code": s["code"], "mkt": s["mkt"]} for s in stocks["stocks"]]
     (SITE_DIR / "universe.json").write_text(json.dumps(universe, separators=(",", ":")), encoding="utf-8")
 
+    # 三大法人買賣超的滾動紀錄：screener.py 已經算好存在 BASE_DIR，這裡複製進 site/
+    # 讓下次執行能讀回（跟 quotes.json 一樣，缺少也不影響網頁其他部分）
+    inst_path = BASE_DIR / "inst_history.json"
+    if inst_path.exists():
+        (SITE_DIR / "inst_history.json").write_text(inst_path.read_text(encoding="utf-8"), encoding="utf-8")
+
     market_html = ""
     try:
         m = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))

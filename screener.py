@@ -322,6 +322,7 @@ def analyze_stock(item, df, inst_notes=None):
             if r:
                 r["理由"] += "；" + note                 # 候選股與搜尋結果的理由欄
     rec = dict(code=item["code"], name=item["name"], mkt=item["mkt"], **core)
+    rec["date"] = date   # 這檔自己的資料日期；main() 跑完全部才知道整體最新日期，之後用來標示是否落後
 
     # 前 HIST_DAYS 個交易日：回到當天重新判斷一次（用精簡欄位，減少網頁大小）
     hist = []
@@ -383,6 +384,16 @@ def main():
             except Exception:
                 failed += 1                 # 單檔失敗不影響其他檔
         print(f"  已處理 {min(i + CHUNK, len(stocks))}/{len(stocks)}", flush=True)
+
+    # 個股資料若比整體最新日期舊（例如 Yahoo 那天剛好收盤價是空的，程式改用前一天資料），
+    # 加註標籤提醒，不然頁面上方寫「資料日期 9/22」會讓人誤以為每一檔都更新到當天
+    stale = 0
+    for rec in records:
+        if rec["date"] != data_date:
+            rec["tags"] = rec["tags"] + [f"資料延遲，停在 {rec['date'][5:]}"]
+            stale += 1
+    if stale:
+        print(f"[注意] {stale} 檔資料比整體日期（{data_date}）舊，已加註標籤")
 
     (BASE_DIR / "stocks.json").write_text(
         json.dumps({"date": data_date, "stocks": records}, ensure_ascii=False, separators=(",", ":")),

@@ -143,6 +143,15 @@ def main():
     except Exception:
         pass                                    # 沒有大盤資料就不顯示這一塊
 
+    # 個股資料若比整體最新日期舊（Yahoo／證交所那天資料剛好延遲），screener.py 已經在
+    # 個股標籤加註「資料延遲」；這裡另外抓比例夠高時在最上方加一則明顯提示，避免被埋沒
+    stale = sum(1 for s in stocks["stocks"] if s.get("date") and s["date"] != stocks["date"])
+    if stocks["stocks"] and stale / len(stocks["stocks"]) >= 0.1:
+        market_html += (f'<div class="market" style="border-color:var(--warn)">'
+                        f'<b>注意</b>：{stale} / {len(stocks["stocks"])} 檔股票的資料還停在前一個交易日'
+                        f'（Yahoo 或證交所資料延遲，不是這個工具的問題），個股標籤會標「資料延遲」，'
+                        f'這些股票的數字請晚點再看。</div>')
+
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
     # JSON 放進 <script> 前，把 "</" 換掉避免提早結束標籤
     data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")

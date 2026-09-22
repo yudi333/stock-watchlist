@@ -1,9 +1,11 @@
-# 週一到週五台灣時間 15:00（UTC 07:00）自動分析並更新網頁
+# 週一到週五台灣時間約 15:07（UTC 07:07）自動分析並更新網頁
 name: daily-update
 
 on:
   schedule:
-    - cron: "0 7 * * 1-5"   # 週一到週五
+    # 刻意避開整點（07:00）：GitHub 官方說明整點是排程最容易被延遲或跳過的時段，
+    # 偏移幾分鐘可以大幅降低這個機率。
+    - cron: "7 7 * * 1-5"   # 週一到週五
   workflow_dispatch:   # 也可以在 GitHub 網頁上手動按「Run workflow」
 
 permissions:

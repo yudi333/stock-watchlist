@@ -131,8 +131,16 @@ python build_site.py    # 產生 site/index.html（網頁）
 
 ## 網頁功能（GitHub Pages）
 
-`.github/workflows/daily.yml` 會在週一到週五台灣時間 15:00 自動執行 `screener.py` 與 `build_site.py` 並更新網頁，
-也可以到 GitHub 的 Actions 頁面手動按 Run workflow。網頁內容：
+`.github/workflows/daily.yml` 會在週一到週五**台灣時間約 14:03 與 15:07** 各自動執行一次
+`screener.py` 與 `build_site.py` 並更新網頁，也可以到 GitHub 的 Actions 頁面手動按 Run workflow。
+
+**為什麼不做盤中即時更新**：股市 13:30 收盤，盤中 Yahoo 回傳的當天資料收盤價是空的，會被
+`stock_checker.py` 的 `drop_unfinished_today()` 濾掉、改用前一天收盤，等於白跑，所以兩次
+都排在收盤後：14:03 提早試著看資料是否已經齊全（沒齊全就安全地維持原狀），15:07 是留了
+緩衝時間的正式版本，一定會有結果。想看盤中即時報價，請用 Yahoo 股市 App、看盤軟體，或網頁上
+每檔的「行情」連結，這個工具的角色是每天的規劃與檢查，不做盤中監控。
+
+網頁內容：
 
 - **搜尋欄**：輸入代號或公司名稱，查全部上市櫃股票（約 1,900 檔）目前有沒有符合的買進訊號，
   顯示是否建議買進、買進／停損／停利價、理由，以及 TradingView／Goodinfo／Yahoo 股市連結，可一鍵加入觀察清單。

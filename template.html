@@ -71,14 +71,6 @@ padding:9px 14px;border:0;border-bottom:1px solid var(--line);background:none;co
 .metrics b{color:var(--text);font-weight:600}
 .verdict{padding:8px 12px;border-radius:8px;border:1px solid currentColor;margin:8px 0;font-size:14px}
 .detail .tablewrap{margin-top:8px}
-/* 收合區塊 */
-details.fold{margin-top:28px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:0 14px}
-details.fold[open]{padding-bottom:14px}
-details.fold summary{cursor:pointer;padding:12px 0;font-size:16px;font-weight:600;list-style:none}
-details.fold summary::-webkit-details-marker{display:none}
-details.fold summary::before{content:'▸';display:inline-block;width:1.2em;color:var(--muted)}
-details.fold[open] summary::before{content:'▾'}
-details.fold summary .tag{margin-left:8px;font-weight:400;vertical-align:1px}
 .pos-in{color:var(--good)}.pos-above{color:var(--warn)}.pos-below{color:var(--muted)}
 .sigline{padding:4px 0}
 .sigline small{color:var(--muted);font-size:12px}
@@ -108,13 +100,18 @@ border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .syncbox h4{margin:0 0 2px;font-size:14px}
 .syncbox .hint{color:var(--muted);font-size:12px;margin:2px 0 0}
 .banner{border:1px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:color-mix(in srgb,var(--accent) 8%,var(--card))}
-/* 帳號登入 */
-.acctbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
-.acctbar .grow{flex:1;color:var(--muted)}
+/* 帳號登入：右上角按鈕 + 下拉面板 */
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.acctwrap{position:relative;flex:0 0 auto}
+.acctpanel{position:absolute;right:0;top:calc(100% + 8px);width:280px;max-width:calc(100vw - 32px);z-index:30}
+.acctpanel .syncbox{box-shadow:0 8px 24px rgba(0,0,0,.16)}
 .gbtn{display:flex;gap:8px;align-items:center;justify-content:center;font:inherit;font-size:13px;padding:8px 14px;
 border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
 .gbtn:hover{border-color:var(--accent)}
 .orsep{color:var(--muted);font-size:12px;text-align:center;margin:10px 0 6px}
+/* 我的持股：標題右邊放「記錄一筆買進」按鈕 */
+.sectionhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:28px 0 10px}
+.sectionhead h2{margin:0}
 /* 觀察清單：展開前幾天的紀錄 */
 .foldbtn{font:inherit;background:none;border:0;padding:0;color:inherit;cursor:pointer;text-align:left}
 .foldbtn:hover{color:var(--accent)}
@@ -152,11 +149,14 @@ padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;pointer-events:non
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 </head>
 <body><main>
-<h1>台股觀察清單</h1>
-<div class="sub">資料日期 __DATA_DATE__　·　網頁更新 __NOW__（台灣時間）</div>
+<div class="topbar">
+  <div>
+    <h1>台股觀察清單</h1>
+    <div class="sub">資料日期 __DATA_DATE__　·　網頁更新 __NOW__（台灣時間）</div>
+  </div>
+  <div id="account" class="acctwrap"></div>
+</div>
 __MARKET__
-
-<div id="account"></div>
 
 <h2>搜尋股票</h2>
 <div class="search">
@@ -165,8 +165,8 @@ __MARKET__
 </div>
 <div id="detail"></div>
 
-<h2>我的持股</h2>
-<div class="sub">記錄買進日期與價格，每天依最新資料算出趨勢，以及是否達停損／停利。<b>只存在這個瀏覽器</b>，不會上傳或公開。</div>
+<div class="sectionhead"><h2>我的持股</h2><div id="holdingsAdd"></div></div>
+<div class="sub">記錄買進日期與價格，每天依最新資料算出趨勢，以及是否達停損／停利。</div>
 <div id="holdings"></div>
 
 <h2>我的觀察清單</h2>
@@ -176,10 +176,10 @@ __MARKET__
 __MULTI__
 
 <h2>每日候選：可留意的買進標的</h2>
-<div class="sub">依「20 種買進訊號」在日線上偵測（成交金額前 150 名）。「買進區間」依各訊號邏輯計算（例如突破價～+3%、均線～+3%），<b>不是昨天收盤價</b>；現價高於區間就不追，等回測。停損、停利以區間上緣計算，停損請以<b>收盤價</b>跌破為準；標「左側」的是提前布局，風險較高。</div>
+<div class="sub">每日15點自動更新。</div>
 __DAILY__
 <h2>每週候選（週線，中期趨勢）</h2>
-<div class="sub">同一套訊號改用週線偵測，較適合抱久一點；週五收盤後的結果是整週完整資料。</div>
+<div class="sub">每週五15點自動更新。</div>
 __WEEKLY__
 
 <footer class="sitefooter">
@@ -355,8 +355,10 @@ __WEEKLY__
     });
     return el('div', { class: 'hpick' }, inp, box);
   }
+  function holdingAddBtn() {
+    return el('button', { class: 'btn primary sm', onclick: () => { addingHolding = true; renderHoldings(); } }, '＋ 記錄一筆買進');
+  }
   function holdingForm() {
-    if (!addingHolding) return el('button', { class: 'btn primary', onclick: () => { addingHolding = true; renderHoldings(); } }, '＋ 記錄一筆買進');
     const today = new Date().toISOString().slice(0, 10);
     const date = el('input', { type: 'date', value: today, max: today });
     const price = el('input', { type: 'number', step: '0.01', min: '0', placeholder: '例如 120.5' });
@@ -390,6 +392,7 @@ __WEEKLY__
   function renderHoldings() {
     if (renderingHoldings) { renderHoldingsAgain = true; return; }
     renderingHoldings = true;
+    const addSlot = $('holdingsAdd'); if (addSlot) addSlot.replaceChildren(addingHolding ? '' : holdingAddBtn());
     const box = $('holdings'); box.replaceChildren();
     const live = LIVE_TIME ? `　·　盤中報價 ${LIVE_TIME}` : '';
     box.append(el('div', { class: 'toolbar' }, el('span', { class: 'grow' }, `共 ${holdings.length} 筆${live}`)));
@@ -416,7 +419,7 @@ __WEEKLY__
       });
       box.append(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, head), el('tbody', {}, rows))));
     }
-    box.append(holdingForm());
+    if (addingHolding) box.append(holdingForm());
     renderingHoldings = false;
     if (renderHoldingsAgain) { renderHoldingsAgain = false; renderHoldings(); }   // 剛剛被擋下的那次，畫完後補畫一次抓最新狀態
   }
@@ -456,27 +459,36 @@ __WEEKLY__
   }
   function fbSignOut() { auth.signOut(); }
 
+  // 帳號按鈕放在右上角，點了才彈出面板（登入表單或登出），不點就完全不佔畫面空間。
+  let acctOpen = false;
   function renderAccount() {
-    const box = $('account'); if (!box || !fbReady) return;
+    const box = $('account'); if (!box) return;
     box.replaceChildren();
+    if (!fbReady) return;
+    const label = fbUser ? (fbUser.displayName || fbUser.email || '帳號') : '登入';
+    box.append(el('button', { class: 'btn', onclick: e => { e.stopPropagation(); acctOpen = !acctOpen; renderAccount(); } },
+      fbUser ? `👤 ${label}` : '登入'));
+    if (!acctOpen) return;
+    const panel = el('div', { class: 'acctpanel' });
     if (fbUser) {
-      box.append(el('div', { class: 'syncbox' }, el('div', { class: 'acctbar' },
-        el('span', { class: 'grow' }, `已登入：${fbUser.email || fbUser.displayName || ''}（觀察清單與持股已同步到這個帳號）`),
-        el('button', { class: 'btn', onclick: fbSignOut }, '登出'))));
-      return;
+      panel.append(el('div', { class: 'syncbox' },
+        el('div', { class: 'hint' }, `已登入：${fbUser.email || fbUser.displayName || ''}`),
+        el('div', { class: 'hint' }, '觀察清單與持股已同步到這個帳號，其他人看不到。'),
+        el('button', { class: 'btn', style: 'width:100%;margin-top:10px', onclick: fbSignOut }, '登出')));
+    } else {
+      const email = el('input', { type: 'email', placeholder: 'Email', autocomplete: 'email' });
+      const pw = el('input', { type: 'password', placeholder: '密碼（至少 6 碼）', autocomplete: 'current-password' });
+      panel.append(el('div', { class: 'syncbox' },
+        el('div', { class: 'hint' }, '登入後，觀察清單和持股會同步到你自己的帳號，換裝置登入同一個帳號就看得到，其他人看不到。不登入也完全可以用，資料只留在這個瀏覽器。'),
+        el('button', { class: 'gbtn', style: 'margin-top:10px;width:100%', onclick: fbSignInGoogle }, '使用 Google 登入'),
+        el('div', { class: 'orsep' }, '或用 Email'),
+        el('div', { class: 'row' }, email, pw),
+        el('div', { class: 'row' },
+          el('button', { class: 'btn primary', onclick: () => fbSignInEmail(email.value.trim(), pw.value) }, '登入'),
+          el('button', { class: 'btn', onclick: () => fbRegisterEmail(email.value.trim(), pw.value) }, '註冊新帳號'),
+          el('button', { class: 'btn', onclick: () => fbForgotPassword(email.value.trim()) }, '忘記密碼'))));
     }
-    const email = el('input', { type: 'email', placeholder: 'Email', autocomplete: 'email' });
-    const pw = el('input', { type: 'password', placeholder: '密碼（至少 6 碼）', autocomplete: 'current-password' });
-    box.append(el('div', { class: 'syncbox' },
-      el('h4', {}, '登入帳號'),
-      el('div', { class: 'hint' }, '登入後，觀察清單和持股會同步到你自己的帳號，換裝置登入同一個帳號就看得到，其他人看不到。不登入也完全可以用，資料只留在這個瀏覽器。'),
-      el('button', { class: 'gbtn', style: 'margin-top:10px;width:100%', onclick: fbSignInGoogle }, '使用 Google 登入'),
-      el('div', { class: 'orsep' }, '或用 Email'),
-      el('div', { class: 'row' }, email, pw),
-      el('div', { class: 'row' },
-        el('button', { class: 'btn primary', onclick: () => fbSignInEmail(email.value.trim(), pw.value) }, '登入'),
-        el('button', { class: 'btn', onclick: () => fbRegisterEmail(email.value.trim(), pw.value) }, '註冊新帳號'),
-        el('button', { class: 'btn', onclick: () => fbForgotPassword(email.value.trim()) }, '忘記密碼'))));
+    box.append(panel);
   }
 
   // 觀察清單：整包寫入（跟 Gist 同步一樣是「目前陣列就是全部」的模式），稍微防抖避免連續操作時狂打 API
@@ -593,7 +605,7 @@ __WEEKLY__
     const bar = el('div', { class: 'toolbar' });
     if (!editing) {
       const allOpen = watch.length && watch.every(c => open.has(c) || !BY[c]);
-      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔　·　最新 ${D.date}　·　點股票名稱展開前 6 個交易日${D.recorded && D.recorded.length ? `　·　已記錄 ${D.recorded.length} 天（自 ${D.recorded[0]}）` : ''}`),
+      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔`),
                  el('button', { class: 'btn', onclick: () => { allOpen ? open.clear() : watch.forEach(c => open.add(c)); renderWatch(); } }, allOpen ? '全部收合' : '全部展開'),
                  el('button', { class: 'btn', onclick: () => { editing = true; sel.clear(); renderWatch(); } }, '編輯'));
     } else {
@@ -703,6 +715,7 @@ __WEEKLY__
     const b = e.target.closest('[data-add]'); if (b) addToWatch(b.dataset.add);
     const d = e.target.closest('[data-detail]');
     if (d) { e.preventDefault(); showDetail(d.dataset.detail); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    if (acctOpen && !e.target.closest('#account')) { acctOpen = false; renderAccount(); }   // 點面板外面就關閉
   });
   refresh();
   renderHoldings();
@@ -710,6 +723,7 @@ __WEEKLY__
   if (fbReady) auth.onAuthStateChanged(user => {   // 放在最後，跟其他初始化呼叫一起，避免依賴到還沒宣告的變數
     detachFirestore();
     fbGen++;                // 世代推進：這之後才觸發的舊監聽回呼，會比對失敗而被丟棄
+    acctOpen = false;       // 登入/登出完成後自動收起面板
     fbUser = user;
     renderAccount();
     renderWatch();          // 「同步」面板的雲端說明要跟著登入狀態換

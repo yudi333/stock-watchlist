@@ -68,7 +68,8 @@ def picks_table(csv_name):
 
 
 def multi_signal_html(stocks):
-    """同時符合 2 個（含）以上「不同種類」右側買進訊號的股票，包成預設收合的 <details>。"""
+    """同時符合 2 個（含）以上「不同種類」右側買進訊號的股票。跟每日/每週候選一樣，
+    用固定顯示的標題＋說明＋表格，不用可收合的 <details>。"""
     found = []
     for st in stocks:
         right = [g for g in st["sigs"] if g["side"] == "右側"]
@@ -77,7 +78,7 @@ def multi_signal_html(stocks):
             found.append((len(kinds), st, right))
     found.sort(key=lambda x: (-x[0], x[1]["code"]))
     if not found:
-        body = '<div class="empty">目前沒有同時符合 2 個以上買進訊號的股票。</div>'
+        table = '<div class="tablewrap"><div class="empty">目前沒有同時符合 2 個以上買進訊號的股票。</div></div>'
     else:
         rows = ""
         for n, st, right in found:
@@ -94,14 +95,12 @@ def multi_signal_html(stocks):
                      f"<td>{st['close']:,.2f}</td><td class='l reason' style='color:inherit'>{lines}</td>"
                      f"<td class='l links'>{links(st['code'], '.TWO' if mkt == 'TPEX' else '.TW')}"
                      f"<br><button class='btn sm' data-add='{st['code']}'>＋觀察</button></td></tr>")
-        body = ('<div class="tablewrap"><table class="multi"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
-                '<th>收盤</th><th class="l">符合的訊號與價位</th><th class="l">連結</th></tr></thead>'
-                f"<tbody>{rows}</tbody></table></div>"
-                '<div class="sub" style="margin-top:8px">點代號可看每個訊號的詳細理由。'
-                '提醒：部分組合本質上是同一個動作（例如「鏡射突破前高」與「窄幅盤整突破」常一起出現，'
-                '「回測均線」與「鏡射拉回」也是），並非完全獨立的確認，仍請自己看 K 線圖。</div>')
-    return (f'<details class="fold"><summary>多重訊號：同時符合 2 個（含）以上買進訊號'
-            f'<span class="tag t-bull">{len(found)} 檔</span></summary>{body}</details>')
+        table = ('<div class="tablewrap"><table class="multi"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
+                 '<th>收盤</th><th class="l">符合的訊號與價位</th><th class="l">連結</th></tr></thead>'
+                 f"<tbody>{rows}</tbody></table></div>")
+    return (f'<h2>多重訊號：同時符合 2 個（含）以上買進訊號（{len(found)} 檔）</h2>'
+            '<div class="sub">點代號可看每個訊號的詳細理由。</div>'
+            f'{table}')
 
 
 def main():

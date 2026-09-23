@@ -39,7 +39,9 @@ def fetch_universe():
 
 
 def fetch_via_cnyes(codes):
-    """鉅亨網報價：一次查 250 檔，上市上櫃都用 TWS 前綴，欄位 21 是最新成交價。"""
+    """鉅亨網報價：一次查 250 檔，上市上櫃都用 TWS 前綴，欄位 6 才是最新成交價。
+    （欄位 21 一開始誤判成最新成交價，是因為驗證時剛好在非交易時段測試，那時「昨收」
+    跟「最新價」數字相同才會誤判；21 其實是前一交易日收盤價，收盤後才會發現兩者不同。）"""
     prices, chunk = {}, 250
     for i in range(0, len(codes), chunk):
         batch = codes[i:i + chunk]
@@ -49,7 +51,7 @@ def fetch_via_cnyes(codes):
                              headers=HEADERS, timeout=20)
             r.raise_for_status()
             for d in r.json().get("data", []):
-                code, price = d.get("200010"), d.get("21")
+                code, price = d.get("200010"), d.get("6")
                 if code and price is not None:
                     prices[code] = round(float(price), 2)
         except Exception as e:

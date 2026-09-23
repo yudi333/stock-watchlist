@@ -23,7 +23,8 @@ from signals import DETECTORS, Ctx, build_trade, calc_kd
 from stock_checker import BASE_DIR, calc_rsi, drop_unfinished_today, judge, load_config
 
 # ---- 想調整就改這裡 ----
-UNIVERSE_SIZE = 150      # 掃描成交金額前幾名（上市 + 上櫃合計）
+UNIVERSE_SIZE = 200      # 候選股掃描成交金額前幾名（上市 + 上櫃合計）
+VOLUME_SIZE = 200        # 再加上成交量前幾名（有些股價低、量能大但成交金額排不進金額榜，用這批補齊）
 MIN_PRICE = 20           # 股價低於這個數字的不看（太便宜的雞蛋水餃股）
 MAX_PICKS = 12           # 每個清單最多列幾檔
 MAX_PER_SIGNAL = 4       # 同一種訊號最多列幾檔（避免被單一訊號洗版）
@@ -71,34 +72,36 @@ FALLBACK = {
 }
 
 
-def fetch_market(url, code_key, name_key, value_key, price_key, suffix):
-    """抓一個交易所的當日行情，回傳 [(代號, 名稱, 後綴, 成交金額, 收盤價)]。"""
+def fetch_market(url, code_key, name_key, value_key, volume_key, price_key, suffix):
+    """抓一個交易所的當日行情，回傳 [(代號, 名稱, 後綴, 成交金額, 成交量, 收盤價)]。"""
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
-    return [(d[code_key], d[name_key], suffix, to_float(d[value_key]), to_float(d[price_key]))
+    return [(d[code_key], d[name_key], suffix, to_float(d[value_key]), to_float(d[volume_key]), to_float(d[price_key]))
             for d in r.json()]
 
 
 def get_universe():
-    """回傳所有 4 碼個股（上市 + 上櫃）：[{code, name, sym, mkt, value, price}]。"""
+    """回傳所有 4 碼個股（上市 + 上櫃）：[{code, name, sym, mkt, value, volume, price}]。
+    value=成交金額、volume=成交量（股數）——候選股同時看這兩個排名（見 main() 的 UNIVERSE_SIZE / VOLUME_SIZE），
+    因為有些股票單價低、成交量很大，但成交金額排不進金額榜，只看金額會漏掉。"""
     items = []
     sources = [
         ("上市", "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-         "Code", "Name", "TradeValue", "ClosingPrice", ".TW", "TWSE"),
+         "Code", "Name", "TradeValue", "TradeVolume", "ClosingPrice", ".TW", "TWSE"),
         ("上櫃", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-         "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "Close", ".TWO", "TPEX"),
+         "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "TradingShares", "Close", ".TWO", "TPEX"),
     ]
-    for label, url, ck, nk, vk, pk, suffix, mkt in sources:
+    for label, url, ck, nk, vk, volk, pk, suffix, mkt in sources:
         try:
-            for c, n, _, v, pr in fetch_market(url, ck, nk, vk, pk, suffix):
+            for c, n, _, v, vol, pr in fetch_market(url, ck, nk, vk, volk, pk, suffix):
                 # 只留 4 碼、且不是 0 開頭的（0 開頭是 ETF）
                 if re.fullmatch(r"[1-9]\d{3}", c):
-                    items.append(dict(code=c, name=n, sym=c + suffix, mkt=mkt, value=v, price=pr))
+                    items.append(dict(code=c, name=n, sym=c + suffix, mkt=mkt, value=v, volume=vol, price=pr))
         except Exception as e:  # 其中一邊失敗，不影響另一邊
             print(f"[注意] 抓不到{label}行情：{e}")
     if not items:
         print("[注意] 官方行情都抓不到，改掃內建的大型權值股清單。")
-        items = [dict(code=c, name=n, sym=c + ".TW", mkt="TWSE", value=1e12 - i, price=999)
+        items = [dict(code=c, name=n, sym=c + ".TW", mkt="TWSE", value=1e12 - i, volume=1e12 - i, price=999)
                  for i, (c, n) in enumerate(FALLBACK.items())]
     return items
 
@@ -345,12 +348,15 @@ def main():
     except Exception as e:
         print(f"取得股票清單失敗：{e}")
         return 1
-    # 候選股只從「成交金額前 N 名」挑（流動性夠），並排除你已在觀察的
-    ranked = sorted((s for s in stocks if s["price"] >= MIN_PRICE), key=lambda s: s["value"], reverse=True)
-    liquid = {s["code"] for s in ranked[:UNIVERSE_SIZE]} - set(watchlist)
+    # 候選股從「成交金額前 N 名」∪「成交量前 M 名」挑（流動性夠），並排除你已在觀察的；
+    # 兩個榜合併是因為有些股票單價低、成交量很大，但成交金額排不進金額榜，只看金額會漏掉
+    eligible = [s for s in stocks if s["price"] >= MIN_PRICE]
+    by_value = sorted(eligible, key=lambda s: s["value"], reverse=True)[:UNIVERSE_SIZE]
+    by_volume = sorted(eligible, key=lambda s: s["volume"], reverse=True)[:VOLUME_SIZE]
+    liquid = ({s["code"] for s in by_value} | {s["code"] for s in by_volume}) - set(watchlist)
     trade_date = market_status()
     inst_notes = fetch_institutional_notes(trade_date)
-    print(f"分析全部 {len(stocks)} 檔（候選股從成交金額前 {UNIVERSE_SIZE} 名挑，{len(liquid)} 檔）...")
+    print(f"分析全部 {len(stocks)} 檔（候選股從成交金額前 {UNIVERSE_SIZE} 名、成交量前 {VOLUME_SIZE} 名挑，{len(liquid)} 檔）...")
 
     results = {"daily": [], "weekly": []}
     records, data_date, failed = [], "", 0

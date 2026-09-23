@@ -16,7 +16,6 @@ from pathlib import Path
 import pandas as pd
 
 import history
-from stock_checker import load_config
 
 BASE_DIR = Path(__file__).parent
 SITE_DIR = BASE_DIR / "site"
@@ -120,9 +119,7 @@ def main():
     (SITE_DIR / "history.json").write_text(
         json.dumps(hist_file, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
-    watchlist, _, _, _ = load_config()          # 預設的觀察清單（使用者在瀏覽器裡改的不會動到這裡）
-    data = {"date": stocks["date"], "stocks": stocks["stocks"], "default_watchlist": watchlist,
-            "recorded": sorted(hist_file["days"])}
+    data = {"date": stocks["date"], "stocks": stocks["stocks"], "recorded": sorted(hist_file["days"])}
 
     # 給盤中報價用的輕量清單（只有代號和市場別），讓 quotes.py 不用下載整份 stocks.json
     universe = [{"code": s["code"], "mkt": s["mkt"]} for s in stocks["stocks"]]

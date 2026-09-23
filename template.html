@@ -224,9 +224,10 @@ __WEEKLY__
   const KEY = 'stock_watchlist_v1';
 
   // ---------- 觀察清單：存在瀏覽器 localStorage ----------
+  // 每個人（不管有沒有登入）都是自己選股票，不預先幫忙塞一份清單；沒有資料就是空的。
   function loadWatch() {
     try { const v = JSON.parse(localStorage.getItem(KEY)); if (Array.isArray(v)) return v.map(String); } catch (e) {}
-    return D.default_watchlist.slice();
+    return [];
   }
   // 注意：登入帳號時完全不寫這個 key，讓它永遠是「跟帳號無關、純本機」的資料——
   // 這樣登出、換登另一個帳號時，才不會把上一個帳號的雲端資料誤當成「這台裝置本來的資料」帶過去。
@@ -669,8 +670,8 @@ __WEEKLY__
         el('table', { class: 'watch' }, el('thead', {}, head), el('tbody', {}, rows)));
       box.append(wrap);
     }
-    if (editing) box.append(el('div', { class: 'sub', style: 'margin-top:8px' },
-      el('button', { class: 'btn sm', onclick: () => { if (confirm('還原成預設的觀察清單？目前的清單會被取代。')) { watch = D.default_watchlist.slice(); sel.clear(); saveWatch(); refresh(); } } }, '還原成預設清單')));
+    if (editing && watch.length) box.append(el('div', { class: 'sub', style: 'margin-top:8px' },
+      el('button', { class: 'btn sm', onclick: () => { if (confirm('清空觀察清單？目前的清單會被全部移除。')) { watch = []; sel.clear(); saveWatch(); refresh(); } } }, '清空觀察清單')));
   }
 
   // ---------- 搜尋 ----------

@@ -243,6 +243,10 @@ __WEEKLY__
   const db = fbReady ? firebase.firestore() : null;
   let fbUser = null;      // 目前登入的帳號（Firebase User 物件），null = 未登入
   let fbUnsub = [];        // Firestore 即時監聽的取消函式
+  let fbGen = 0;           // 「世代」標記：每次登入/登出都 +1，監聽回呼觸發時比對，不是目前這代就丟棄。
+                          // 用意：取消訂閱（unsubscribe）跟網路上「已經在路上」的回呼之間有時間差，
+                          // 登出或快速切換帳號時，舊帳號的回呼可能在取消訂閱後才真正觸發，
+                          // 這時如果沒有比對世代，就會把舊帳號的資料寫回畫面（登出後殘留、或污染到新登入的帳號）。
 
   const KEY = 'stock_watchlist_v1';
 
@@ -530,18 +534,22 @@ __WEEKLY__
   function detachFirestore() { fbUnsub.forEach(u => u()); fbUnsub = []; }
   async function attachFirestore() {
     const wDoc = userDoc(), hCol = holdingsCol();
+    const myGen = fbGen;   // 記住現在是第幾代；回呼觸發時若世代已經變了（登出或換了別的帳號），就不採用
     let cloudEmpty = false;
     try {
       const [wSnap, hSnap] = await Promise.all([wDoc.get(), hCol.get()]);
       cloudEmpty = !wSnap.exists && hSnap.empty;
     } catch (e) { toast('讀取雲端資料失敗：' + e.message); }
+    if (myGen !== fbGen) return;   // 這段 await 期間使用者已經登出或切了帳號，整個放棄，不要動畫面
 
     const startListeners = () => {
       fbUnsub.push(wDoc.onSnapshot(snap => {
+        if (myGen !== fbGen) return;   // 取消訂閱前，可能還有一則「已經在路上」的回呼，過期就丟棄
         watch = (snap.exists ? (snap.data().watchlist || []) : []).map(String);
         writeLocal(); refresh();
       }, e => toast('觀察清單同步失敗：' + e.message)));
       fbUnsub.push(hCol.onSnapshot(snap => {
+        if (myGen !== fbGen) return;
         snap.docChanges().forEach(ch => {
           const id = ch.doc.id, i = holdings.findIndex(h => String(h.id) === id);
           if (ch.type === 'removed') { if (i >= 0) holdings.splice(i, 1); }
@@ -947,6 +955,7 @@ __WEEKLY__
   window.addEventListener('hashchange', route);
   if (fbReady) auth.onAuthStateChanged(user => {   // 放在最後，跟其他初始化呼叫一起，避免依賴到還沒宣告的變數
     detachFirestore();
+    fbGen++;                // 世代推進：這之後才觸發的舊監聽回呼，會比對失敗而被丟棄
     fbUser = user;
     renderAccount();
     renderWatch();          // 「同步」面板的雲端說明要跟著登入狀態換

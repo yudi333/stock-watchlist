@@ -670,8 +670,6 @@ __WEEKLY__
         el('table', { class: 'watch' }, el('thead', {}, head), el('tbody', {}, rows)));
       box.append(wrap);
     }
-    if (editing && watch.length) box.append(el('div', { class: 'sub', style: 'margin-top:8px' },
-      el('button', { class: 'btn sm', onclick: () => { if (confirm('清空觀察清單？目前的清單會被全部移除。')) { watch = []; sel.clear(); saveWatch(); refresh(); } } }, '清空觀察清單')));
   }
 
   // ---------- 搜尋 ----------

@@ -147,8 +147,10 @@ python build_site.py    # 產生 site/index.html（網頁）
   達到參考價後不必馬上賣，網頁會提示「可依紀律賣出，或續抱讓移動停損保護獲利」。
 - **建議**：現價 ≤ 移動停損 → 賣出；季線轉弱或短線過熱 → 提醒留意風險；其餘 → 續抱。
 
-**只存在這個瀏覽器**（localStorage），不會上傳到 GitHub，也不會進雲端 Gist——買進價、股數是敏感資料，
+**預設只存在這個瀏覽器**（localStorage），不會上傳到 GitHub，也不會進雲端 Gist——買進價、股數是敏感資料，
 處理原則跟「網站不顯示持股」一致。換裝置、清除網站資料時不會跟著走；要備份就自己截圖或記錄。
+只有你自己**登入帳號**後，才會另外同步一份到你自己的雲端資料（見下一節「登入與雲端帳號」），
+其他人看不到，也可以完全不登入、維持只在單一瀏覽器的做法。
 
 ### 盤中價格（quotes.json）
 
@@ -169,6 +171,61 @@ python build_site.py    # 產生 site/index.html（網頁）
 確認過使用條款，純粹是實測「抓得到、格式對得起來」。哪天其中一個改版、限流或擋掉，
 `intraday-quotes.yml` 的執行會失敗（`continue-on-error`，不影響其他部分），持股只是暫時看不到
 盤中價格、退回收盤價，不會影響觀察清單、候選股或整個網站。想調整頻率就改這個檔案裡的 `cron`。
+
+## 登入與雲端帳號（Firebase）
+
+讓每個人可以用自己的帳號管理自己的觀察清單和持股，彼此看不到對方的資料——這是給「開放給其他人用」
+準備的功能。跟前面的 GitHub Gist 同步不同：Gist 是單人跨裝置同步，這裡是**多人各自獨立**的帳號系統。
+
+**沒設定的話完全不影響現有功能**：`template.html` 最上方的 `FIREBASE_CONFIG` 沒填之前，帳號相關的
+畫面整個不會出現，搜尋、觀察清單、持股（含 Gist 同步）都跟今天一模一樣。想先不管這個功能可以直接
+跳過這一節。
+
+### 設定步驟（一次性，站長做）
+
+1. 到 [Firebase 主控台](https://console.firebase.google.com) 建立一個新專案（免費 **Spark** 方案即可）
+2. **Authentication → Sign-in method**：啟用 `Email/Password` 與 `Google` 兩個登入方式
+3. **Firestore Database → 建立資料庫**（正式模式），建好後點 **規則（Rules）** 分頁，整段換成：
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /users/{uid} {
+         allow read, write: if request.auth != null && request.auth.uid == uid;
+         match /holdings/{holdingId} {
+           allow read, write: if request.auth != null && request.auth.uid == uid;
+         }
+       }
+     }
+   }
+   ```
+   效果：只有本人能讀寫自己帳號底下的資料，其他人（包含沒登入的訪客）完全看不到、改不到。
+4. **專案設定（齒輪圖示）→ 一般 → 新增應用程式 → 網頁**，複製出現的設定物件，貼進
+   [template.html](template.html) 最上方的 `FIREBASE_CONFIG`（欄位是 apiKey / authDomain /
+   projectId / storageBucket / messagingSenderId / appId）。**這組值不是密碼**——Firebase 的安全機制
+   靠的是上一步的規則，不是隱藏這組設定，可以放心貼進去、正常 commit 上傳。
+5. **Authentication → Settings → Authorized domains**：確認清單裡有 `yudi333.github.io`
+   （新專案通常只內建 localhost，Google 登入在正式網域上才不會被擋，需要手動加）
+
+改完 `FIREBASE_CONFIG` 後，重新 `python build_site.py` 上傳即可，不用改任何 Python 或 workflow。
+
+### 資料放在哪裡
+```
+users/{uid}                       # 一份文件：{ watchlist: [...代號] }
+users/{uid}/holdings/{holdingId}  # 一筆持股一份文件
+```
+登入時：本機修改一律先寫 localStorage（速度快、離線也能用），再加寫一份到 Firestore；
+Firestore 用即時監聽（`onSnapshot`），另一台裝置改了，這台**開著網頁就會自動更新**，不用重新整理，
+比 Gist 同步（要重開才拉新資料）更即時。第一次登入、雲端還沒有資料時，會問要不要把這台裝置目前的
+觀察清單和持股匯入帳號；不是新帳號就直接套用雲端內容。登入時「同步」面板會顯示已改用帳號同步，
+原本的 Gist 同步不會同時作用（避免兩邊互相蓋掉，登出後 Gist 同步照常可用）。
+
+### 要知道的事
+- 免費 Spark 方案的額度（Firestore 每日約 5 萬次讀取、2 萬次寫入）對個人或朋友間小規模使用綽綽有餘，
+  真的成長到很多人用才需要考慮升級付費方案
+- 這一版只有 Email/密碼與 Google 登入，沒有做忘記密碼信件的客製化、沒有其他登入方式
+- **開放給不特定的其他人用之前**，建議另外寫一份簡短的隱私聲明，讓使用者知道資料怎麼被使用、
+  你會不會看到——保管別人的財務資料是有責任的，這不是技術問題，是那時候要補的一步
 
 ## 網頁功能（GitHub Pages）
 

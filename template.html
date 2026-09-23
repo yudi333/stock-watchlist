@@ -104,6 +104,13 @@ border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .syncbox h4{margin:0 0 2px;font-size:14px}
 .syncbox .hint{color:var(--muted);font-size:12px;margin:2px 0 0}
 .banner{border:1px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:color-mix(in srgb,var(--accent) 8%,var(--card))}
+/* 帳號登入 */
+.acctbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.acctbar .grow{flex:1;color:var(--muted)}
+.gbtn{display:flex;gap:8px;align-items:center;justify-content:center;font:inherit;font-size:13px;padding:8px 14px;
+border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+.gbtn:hover{border-color:var(--accent)}
+.orsep{color:var(--muted);font-size:12px;text-align:center;margin:10px 0 6px}
 /* 觀察清單：展開前幾天的紀錄 */
 .foldbtn{font:inherit;background:none;border:0;padding:0;color:inherit;cursor:pointer;text-align:left}
 .foldbtn:hover{color:var(--accent)}
@@ -133,11 +140,19 @@ tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--text);color:var(--bg);
 padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.show{opacity:.92}
-</style></head>
+</style>
+<!-- Firebase：登入與雲端資料庫（Auth + Firestore）。沒填 FIREBASE_CONFIG 時，帳號相關功能整個隱藏，
+     其他功能（搜尋、觀察清單、持股）完全不受影響，見下方 fbReady 判斷。 -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+</head>
 <body><main>
 <h1>台股觀察清單</h1>
 <div class="sub">資料日期 __DATA_DATE__　·　網頁更新 __NOW__（台灣時間）</div>
 __MARKET__
+
+<div id="account"></div>
 
 <h2>搜尋股票</h2>
 <div class="search">
@@ -175,8 +190,23 @@ __WEEKLY__
   const D = JSON.parse(document.getElementById('data').textContent);
   const BY = {};
   D.stocks.forEach(s => BY[s.code] = s);
-  const KEY = 'stock_watchlist_v1';
   const $ = id => document.getElementById(id);
+
+  // ---------- 帳號登入（Firebase）：設定值不是密碼，安全機制交給 Firestore 規則 ----------
+  // 還沒申請 Firebase 專案、或還沒填設定值時，fbReady 是 false，帳號相關功能整個不顯示，
+  // 其他功能（搜尋、觀察清單、持股）完全不受影響。
+  const FIREBASE_CONFIG = {
+    apiKey: "填入你的", authDomain: "填入你的", projectId: "填入你的",
+    storageBucket: "填入你的", messagingSenderId: "填入你的", appId: "填入你的",
+  };
+  const fbReady = !!(window.firebase && FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey !== "填入你的");
+  if (fbReady) firebase.initializeApp(FIREBASE_CONFIG);
+  const auth = fbReady ? firebase.auth() : null;
+  const db = fbReady ? firebase.firestore() : null;
+  let fbUser = null;      // 目前登入的帳號（Firebase User 物件），null = 未登入
+  let fbUnsub = [];        // Firestore 即時監聽的取消函式
+
+  const KEY = 'stock_watchlist_v1';
 
   // ---------- 觀察清單：存在瀏覽器 localStorage ----------
   function loadWatch() {
@@ -184,7 +214,10 @@ __WEEKLY__
     return D.default_watchlist.slice();
   }
   function writeLocal() { try { localStorage.setItem(KEY, JSON.stringify(watch)); } catch (e) {} }
-  function saveWatch() { writeLocal(); markChanged(); }   // 任何修改都走這裡：存本機，並（若有啟用）自動上傳雲端
+  // 任何修改都走這裡：存本機，再依登入狀態決定要不要自動上傳雲端。
+  // 登入用帳號時走 Firestore（fbPushWatchlist），沒登入才走原本的 Gist 同步（markChanged），
+  // 兩者不會同時啟用，避免混淆。
+  function saveWatch() { writeLocal(); fbUser ? fbPushWatchlist() : markChanged(); }
   let watch = loadWatch();
   let editing = false;
   const sel = new Set();
@@ -226,7 +259,8 @@ __WEEKLY__
 
 
   // ---------- 我的持股：記錄買進、每天算趨勢、移動停損／停利，是否該賣 ----------
-  // 只存在這個瀏覽器（localStorage），不會上傳、不會公開，因為買進價與股數是敏感資料。
+  // 預設只存在這個瀏覽器（localStorage），不會上傳、不會公開，因為買進價與股數是敏感資料；
+  // 只有你自己登入帳號後，才會另外同步一份到你自己的雲端資料（其他人看不到，見「帳號登入」）。
   //
   // 移動停損／停利（trailing stop）：出場點只跟著「買進後的最高價」往上調，不會往下調；
   // 股價從最高點回落到設定的百分比就出場。跟固定停損停利不同：不會漲到某個目標價就急著
@@ -286,10 +320,14 @@ __WEEKLY__
     if (c >= refTarget) return { cls: 'st-target', text: `已達原始停利參考 ${num(refTarget)}：移動停損已上移到 ${num(stop)}，可依紀律賣出，或續抱讓移動停損保護獲利` };
     return { cls: 'st-hold', text: locked ? `續抱：移動停損已上移到 ${num(stop)}（最高 ${num(peak)}）` : `續抱：介於停損 ${num(stop)} 與停利參考 ${num(refTarget)} 之間` };
   }
-  function addHolding(hd) { holdings.push({ peak: hd.buyPrice, ...hd }); saveHoldings(); addingHolding = false; pickedCode = null; renderHoldings(); toast('已記錄買進'); }
+  function addHolding(hd) {
+    const rec = { peak: hd.buyPrice, ...hd };
+    holdings.push(rec); saveHoldings(); if (fbUser) fbSetHolding(rec);
+    addingHolding = false; pickedCode = null; renderHoldings(); toast('已記錄買進');
+  }
   function removeHolding(id) {
     if (!confirm('確定刪除這筆持股紀錄？（不是賣出下單，只是刪除記錄）')) return;
-    holdings = holdings.filter(h => h.id !== id); saveHoldings(); renderHoldings();
+    holdings = holdings.filter(h => h.id !== id); saveHoldings(); if (fbUser) fbDeleteHolding(id); renderHoldings();
   }
   function stockPicker(onPick) {
     const inp = el('input', { type: 'text', placeholder: '輸入代號或名稱', autocomplete: 'off' });
@@ -336,13 +374,16 @@ __WEEKLY__
         el('button', { class: 'btn primary', onclick: submit }, '確認記錄'),
         el('button', { class: 'btn', onclick: () => { addingHolding = false; pickedCode = null; renderHoldings(); } }, '取消')));
   }
+  let renderingHoldings = false, renderHoldingsAgain = false;   // 防止重入：畫面畫到一半時，若又被同步觸發一次，直接跳過，改成畫完後再補畫一次
   function renderHoldings() {
+    if (renderingHoldings) { renderHoldingsAgain = true; return; }
+    renderingHoldings = true;
     const box = $('holdings'); box.replaceChildren();
     const live = LIVE_TIME ? `　·　盤中報價 ${LIVE_TIME}` : '';
     box.append(el('div', { class: 'toolbar' }, el('span', { class: 'grow' }, `共 ${holdings.length} 筆${live}`)));
     if (holdings.length) {
       let changed = false;
-      holdings.forEach(hd => { if (updatePeak(hd, BY[hd.code])) changed = true; });
+      holdings.forEach(hd => { if (updatePeak(hd, BY[hd.code])) { changed = true; if (fbUser) fbUpdatePeak(hd); } });
       if (changed) saveHoldings();
       const head = el('tr', {}, ...['代號', '名稱', '買進日期', '買進價', '最高價', '現價', '損益', '移動停損', '停利參考'].map(t => el('th', { class: ['代號', '名稱'].includes(t) ? 'l' : '' }, t)),
         el('th', { class: 'l' }, '趨勢與建議'), el('th', { class: 'l' }, ''));
@@ -364,6 +405,128 @@ __WEEKLY__
       box.append(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, head), el('tbody', {}, rows))));
     }
     box.append(holdingForm());
+    renderingHoldings = false;
+    if (renderHoldingsAgain) { renderHoldingsAgain = false; renderHoldings(); }   // 剛剛被擋下的那次，畫完後補畫一次抓最新狀態
+  }
+
+  // ---------- 帳號登入（Firebase）：讓每個人用自己的帳號管理自己的觀察清單與持股 ----------
+  // 沒設定 FIREBASE_CONFIG（fbReady=false）時，這一整段完全不會顯示、也不會被呼叫到，
+  // 網站行為跟沒有這個功能時一模一樣。登入後，資料存在 Firestore，用安全規則保證
+  // 只有本人能讀寫自己 uid 底下的資料（見 README「登入與雲端帳號」）。
+  function userDoc() { return db.collection('users').doc(fbUser.uid); }
+  function holdingsCol() { return userDoc().collection('holdings'); }
+
+  function fbAuthError(e) {
+    const map = { 'auth/invalid-email': 'Email 格式不對', 'auth/user-not-found': '找不到這個帳號，要不要改用「註冊新帳號」？',
+      'auth/wrong-password': '密碼錯誤', 'auth/invalid-credential': 'Email 或密碼錯誤',
+      'auth/email-already-in-use': '這個 Email 已經註冊過，改用「登入」', 'auth/weak-password': '密碼太簡單（至少 6 碼）',
+      'auth/popup-closed-by-user': '登入視窗被關閉', 'auth/unauthorized-domain': '這個網域還沒加進 Firebase 的 Authorized domains' };
+    return map[e.code] || ('登入失敗：' + e.message);
+  }
+  async function fbSignInGoogle() {
+    try { await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+    catch (e) { toast(fbAuthError(e)); }
+  }
+  async function fbSignInEmail(email, pw) {
+    if (!email || !pw) return toast('請輸入 Email 和密碼');
+    try { await auth.signInWithEmailAndPassword(email, pw); }
+    catch (e) { toast(fbAuthError(e)); }
+  }
+  async function fbRegisterEmail(email, pw) {
+    if (!email || !pw) return toast('請輸入 Email 和密碼');
+    try { await auth.createUserWithEmailAndPassword(email, pw); toast('已註冊並登入'); }
+    catch (e) { toast(fbAuthError(e)); }
+  }
+  async function fbForgotPassword(email) {
+    if (!email) return toast('請先在上面填 Email');
+    try { await auth.sendPasswordResetEmail(email); toast('已寄出重設密碼信，請檢查信箱'); }
+    catch (e) { toast(fbAuthError(e)); }
+  }
+  function fbSignOut() { auth.signOut(); }
+
+  function renderAccount() {
+    const box = $('account'); if (!box || !fbReady) return;
+    box.replaceChildren();
+    if (fbUser) {
+      box.append(el('div', { class: 'syncbox' }, el('div', { class: 'acctbar' },
+        el('span', { class: 'grow' }, `已登入：${fbUser.email || fbUser.displayName || ''}（觀察清單與持股已同步到這個帳號）`),
+        el('button', { class: 'btn', onclick: fbSignOut }, '登出'))));
+      return;
+    }
+    const email = el('input', { type: 'email', placeholder: 'Email', autocomplete: 'email' });
+    const pw = el('input', { type: 'password', placeholder: '密碼（至少 6 碼）', autocomplete: 'current-password' });
+    box.append(el('div', { class: 'syncbox' },
+      el('h4', {}, '登入帳號'),
+      el('div', { class: 'hint' }, '登入後，觀察清單和持股會同步到你自己的帳號，換裝置登入同一個帳號就看得到，其他人看不到。不登入也完全可以用，資料只留在這個瀏覽器。'),
+      el('button', { class: 'gbtn', style: 'margin-top:10px;width:100%', onclick: fbSignInGoogle }, '使用 Google 登入'),
+      el('div', { class: 'orsep' }, '或用 Email'),
+      el('div', { class: 'row' }, email, pw),
+      el('div', { class: 'row' },
+        el('button', { class: 'btn primary', onclick: () => fbSignInEmail(email.value.trim(), pw.value) }, '登入'),
+        el('button', { class: 'btn', onclick: () => fbRegisterEmail(email.value.trim(), pw.value) }, '註冊新帳號'),
+        el('button', { class: 'btn', onclick: () => fbForgotPassword(email.value.trim()) }, '忘記密碼'))));
+  }
+
+  // 觀察清單：整包寫入（跟 Gist 同步一樣是「目前陣列就是全部」的模式），稍微防抖避免連續操作時狂打 API
+  let watchPushTimer = null;
+  function fbPushWatchlist() {
+    clearTimeout(watchPushTimer);
+    watchPushTimer = setTimeout(() => {
+      userDoc().set({ watchlist: watch }, { merge: true }).catch(e => toast('觀察清單同步失敗：' + e.message));
+    }, 800);
+  }
+  // 持股：一筆一份文件，新增/刪除/更新最高價都是針對單一文件的操作，不會互相蓋掉
+  function fbSetHolding(rec) {
+    holdingsCol().doc(String(rec.id)).set(rec).catch(e => toast('持股同步失敗：' + e.message));
+  }
+  function fbDeleteHolding(id) {
+    holdingsCol().doc(String(id)).delete().catch(e => toast('持股同步失敗：' + e.message));
+  }
+  function fbUpdatePeak(hd) {
+    holdingsCol().doc(String(hd.id)).update({ peak: hd.peak }).catch(() => {});   // 失敗就算了，下次存檔還會再試
+  }
+
+  function detachFirestore() { fbUnsub.forEach(u => u()); fbUnsub = []; }
+  async function attachFirestore() {
+    const wDoc = userDoc(), hCol = holdingsCol();
+    let cloudEmpty = false;
+    try {
+      const [wSnap, hSnap] = await Promise.all([wDoc.get(), hCol.get()]);
+      cloudEmpty = !wSnap.exists && hSnap.empty;
+    } catch (e) { toast('讀取雲端資料失敗：' + e.message); }
+
+    const startListeners = () => {
+      fbUnsub.push(wDoc.onSnapshot(snap => {
+        watch = (snap.exists ? (snap.data().watchlist || []) : []).map(String);
+        writeLocal(); refresh();
+      }, e => toast('觀察清單同步失敗：' + e.message)));
+      fbUnsub.push(hCol.onSnapshot(snap => {
+        snap.docChanges().forEach(ch => {
+          const id = ch.doc.id, i = holdings.findIndex(h => String(h.id) === id);
+          if (ch.type === 'removed') { if (i >= 0) holdings.splice(i, 1); }
+          else if (i >= 0) holdings[i] = ch.doc.data();
+          else holdings.push(ch.doc.data());
+        });
+        saveHoldings(); renderHoldings();
+      }, e => toast('持股同步失敗：' + e.message)));
+    };
+    const importLocalToCloud = async () => {
+      try {
+        await wDoc.set({ watchlist: watch });
+        await Promise.all(holdings.map(hd => hCol.doc(String(hd.id)).set(hd)));
+        toast('已匯入到帳號');
+      } catch (e) { toast('匯入失敗：' + e.message); }
+    };
+
+    if (cloudEmpty && (watch.length || holdings.length)) {
+      showBanner(el('div', {}, el('b', {}, '這是新帳號，雲端還沒有資料。')),
+        hint('要把這台裝置目前的觀察清單與持股匯入帳號嗎？之後這台會改用帳號裡的資料，換裝置登入同一帳號都看得到。'),
+        bannerBtns(
+          el('button', { class: 'btn primary', onclick: () => { $('banner').replaceChildren(); importLocalToCloud().then(startListeners); } }, '匯入到帳號'),
+          el('button', { class: 'btn', onclick: () => { $('banner').replaceChildren(); startListeners(); } }, '不匯入，從空的開始')));
+    } else {
+      startListeners();
+    }
   }
 
   // ---------- 加入 / 移除 ----------
@@ -553,6 +716,10 @@ __WEEKLY__
   function stopCloud() { sw = null; saveSW(); setCloud(''); refresh(); toast('已停止雲端同步（清單仍保留在這台）'); }
   function route() { location.hash.startsWith('#g=') ? linkCloud() : renderBanner(); }
   function cloudSection() {
+    if (fbUser) {   // 登入帳號時以帳號同步為主，避免跟 Gist 同步的「哪一個才是真的」混淆
+      return el('div', {}, el('h4', {}, '雲端自動同步'),
+        el('div', { class: 'hint' }, `已用帳號（${fbUser.email || fbUser.displayName || ''}）同步，換裝置登入同一個帳號就會自動看到最新清單，不需要另外設定。`));
+    }
     if (!sw) {
       const tk = el('input', { type: 'password', placeholder: '貼上 token（ghp_…）', autocomplete: 'off' });
       return el('div', {},
@@ -737,6 +904,13 @@ __WEEKLY__
   route();
   if (sw && !(location.hash.startsWith('#g=') && location.hash.slice(3) !== sw.id)) syncOnLoad();
   window.addEventListener('hashchange', route);
+  if (fbReady) auth.onAuthStateChanged(user => {   // 放在最後，跟其他初始化呼叫一起，避免依賴到還沒宣告的變數
+    detachFirestore();
+    fbUser = user;
+    renderAccount();
+    renderWatch();          // 「同步」面板的雲端說明要跟著登入狀態換
+    if (user) attachFirestore(); else { holdings = loadHoldings(); renderHoldings(); watch = loadWatch(); refresh(); }
+  });
   if (!D.stocks.length) $('detail').append(el('div', { class: 'detail' }, '今天的分析資料產生失敗，搜尋與觀察清單暫時無法使用，稍後再試。'));
 })();
 </script>

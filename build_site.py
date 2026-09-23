@@ -135,6 +135,12 @@ def main():
     if inst_path.exists():
         (SITE_DIR / "inst_history.json").write_text(inst_path.read_text(encoding="utf-8"), encoding="utf-8")
 
+    # 服務條款／隱私權政策是獨立的靜態頁面（不是樣板產生的），原封不動複製進 site/
+    for name in ("terms.html", "privacy.html"):
+        src = BASE_DIR / name
+        if src.exists():
+            (SITE_DIR / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
     market_html = ""
     try:
         m = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))

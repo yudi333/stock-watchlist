@@ -203,10 +203,49 @@ def to_weekly(df):
 # ---------------------------------------------------------------
 # 3. 主程式
 # ---------------------------------------------------------------
+def fetch_otc_index():
+    """櫃買指數（上櫃大盤，代號 IX0043.TWO）：只回傳現價與漲跌%，不算月線/季線——
+    Yahoo 對這檔沒有提供完整歷史線圖資料（history() 不管抓多長區間都只有「今天」這一筆），
+    只有 fast_info 的即時報價（現價、昨收）能用，所以沒辦法像加權指數一樣判斷多空。
+    抓不到就回傳 None，不影響大盤（加權指數）的判斷。"""
+    try:
+        fi = yf.Ticker("IX0043.TWO").fast_info
+        close, prev = fi["lastPrice"], fi["previousClose"]
+        if not (close and prev):
+            return None
+        return {"close": round(float(close), 2), "chg_pct": round((close / prev - 1) * 100, 2)}
+    except Exception as e:
+        print(f"[注意] 抓不到櫃買指數：{e}")
+        return None
+
+
+def fetch_night_futures():
+    """台指期夜盤（盤後交易）：官方 TAIFEX OpenAPI，只給「目前最新一筆」、無法查歷史（跟三大法人
+    資料不同，這裡沒辦法用滾動紀錄補歷史），所以白天（daily.yml 收盤後那幾次）看到的其實是
+    前一晚的夜盤結果，晚上 15:00 之後夜盤開始交易，才會看到當晚即時的（回傳的 date 就是實際那筆
+    資料的交易日，網頁會照實顯示，不會假裝是今天）。近月合約（ContractMonth(Week) 最小的）最多人看。
+    抓不到就回傳 None，不影響大盤／櫃買的判斷。"""
+    try:
+        r = requests.get("https://openapi.taifex.com.tw/v1/DailyMarketReportFut", headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        rows = [d for d in r.json() if d.get("Contract") == "TX" and d.get("TradingSession") == "盤後"
+                and d.get("Last") not in (None, "-", "NULL")]
+        if not rows:
+            return None
+        near = min(rows, key=lambda d: d["ContractMonth(Week)"])
+        d = near["Date"]
+        return {"date": f"{d[:4]}-{d[4:6]}-{d[6:]}", "month": near["ContractMonth(Week)"][4:] + "月",
+                "close": float(near["Last"]), "chg_pct": float(near["%"].rstrip("%"))}
+    except Exception as e:
+        print(f"[注意] 抓不到台指期夜盤：{e}")
+        return None
+
+
 def market_status():
-    """大盤（加權指數）強弱：課程提醒「大盤在漲時，個股漲的機會較大」。寫入 market.json 給網頁用。
-    回傳實際的交易日期（給 fetch_institutional_notes 用，比系統時鐘準——排程萬一延遲跨到隔天，
-    系統日期就會跟股票資料所屬的交易日對不上）；抓不到就回傳 None。"""
+    """大盤（加權指數）強弱：課程提醒「大盤在漲時，個股漲的機會較大」。順便加上櫃買指數、
+    台指期夜盤兩個輔助參考（見上面兩個函式的說明，這兩個都只是現價快照，不影響大盤的多空判斷）。
+    寫入 market.json 給網頁用。回傳實際的交易日期（給 fetch_institutional_notes 用，比系統時鐘準——
+    排程萬一延遲跨到隔天，系統日期就會跟股票資料所屬的交易日對不上）；大盤抓不到就回傳 None。"""
     try:
         c = yf.Ticker("^TWII").history(period="1y")["Close"].dropna()
         c = c[c.index.dayofweek < 5]        # 剔除週末假資料
@@ -221,8 +260,16 @@ def market_status():
         date = c.index[-1].strftime("%Y-%m-%d")
         info = {"date": date, "close": round(float(c.iloc[-1]), 2),
                 "ma20": round(float(ma20), 2), "ma60": round(float(ma60), 2), "text": text}
+        otc = fetch_otc_index()
+        if otc:
+            info["otc"] = otc
+        night = fetch_night_futures()
+        if night:
+            info["night"] = night
         (BASE_DIR / "market.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
-        print(f"大盤：{text}")
+        print(f"大盤：{text}"
+              + (f"；櫃買 {otc['close']:,.2f}（{otc['chg_pct']:+.2f}%）" if otc else "")
+              + (f"；夜盤（{night['month']}台指期 {night['date']}）{night['close']:,.0f}（{night['chg_pct']:+.2f}%）" if night else ""))
         return date
     except Exception as e:
         print(f"[注意] 抓不到大盤資料：{e}")

@@ -140,8 +140,23 @@ def main():
     market_html = ""
     try:
         m = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))
-        market_html = (f'<div class="market"><b>大盤</b>（{m["date"]}　加權 {m["close"]:,.0f}，'
-                       f'月線 {m["ma20"]:,.0f}／季線 {m["ma60"]:,.0f}）：{html.escape(m["text"])}</div>')
+        rows = [f'<div><b>日期</b>：{m["date"]}</div>',
+                f'<div><b>大盤</b>：加權 {m["close"]:,.0f}（月線 {m["ma20"]:,.0f}／季線 {m["ma60"]:,.0f}）'
+                f'{html.escape(m["text"])}</div>']
+        # 櫃買、夜盤都是「現價快照」，Yahoo／TAIFEX 沒提供完整歷史資料，只能顯示現價漲跌，
+        # 不像大盤（加權指數）能算月線/季線判斷多空；抓不到就不顯示，不影響大盤那一行
+        if "otc" in m:
+            d = m["otc"]
+            arrow, cls = ("▲", "up") if d["chg_pct"] > 0 else (("▼", "down") if d["chg_pct"] < 0 else ("－", ""))
+            rows.append(f'<div><b>櫃買</b>：{d["close"]:,.2f}　'
+                        f'<span class="{cls}">{arrow} {abs(d["chg_pct"])}%</span></div>')
+        if "night" in m:
+            d = m["night"]
+            arrow, cls = ("▲", "up") if d["chg_pct"] > 0 else (("▼", "down") if d["chg_pct"] < 0 else ("－", ""))
+            rows.append(f'<div><b>夜盤</b>：{d["month"]}台指期 {d["close"]:,.0f}　'
+                        f'<span class="{cls}">{arrow} {abs(d["chg_pct"])}%</span>　'
+                        f'<small style="color:var(--muted)">（最新一筆：{d["date"]}，跟大盤一起在每次網頁更新時刷新）</small></div>')
+        market_html = f'<div class="market">{"".join(rows)}</div>'
     except Exception:
         pass                                    # 沒有大盤資料就不顯示這一塊
 

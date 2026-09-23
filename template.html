@@ -94,14 +94,17 @@ td a[data-detail]{color:var(--accent);text-decoration:none;border-bottom:1px dot
 /* 同步 */
 .syncbox{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
 .syncbox .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
-.syncbox input[type=text],.syncbox input[type=password],.syncbox textarea{flex:1;min-width:0;font:inherit;font-size:13px;padding:8px 10px;border-radius:8px;
+.syncbox input[type=text],.syncbox input[type=email],.syncbox input[type=password],.syncbox textarea{width:100%;flex:1;min-width:0;font:inherit;font-size:13px;padding:8px 10px;border-radius:8px;
 border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .syncbox textarea{width:100%;min-height:64px;resize:vertical}
 .syncbox h4{margin:0 0 2px;font-size:14px}
 .syncbox .hint{color:var(--muted);font-size:12px;margin:2px 0 0}
 .banner{border:1px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:color-mix(in srgb,var(--accent) 8%,var(--card))}
 /* 帳號登入：右上角按鈕 + 下拉面板 */
-.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+/* 不能讓 topbar 換行：換行後帳號按鈕會跑到左邊，右邊定位的下拉面板（right:0）就會整個偏移到螢幕外。
+   改成標題那一欄自己縮寬、自己換行，帳號按鈕永遠固定在同一行的最右邊。 */
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.topbar>div:first-child{flex:1;min-width:0}
 .acctwrap{position:relative;flex:0 0 auto}
 .acctpanel{position:absolute;right:0;top:calc(100% + 8px);width:280px;max-width:calc(100vw - 32px);z-index:30}
 .acctpanel .syncbox{box-shadow:0 8px 24px rgba(0,0,0,.16)}
@@ -311,29 +314,40 @@ __WEEKLY__
     if (m !== hd.peak) { hd.peak = m; return true; }
     return false;
   }
+  // 停損／停利分兩階段：
+  // 1. 剛買進時，用「訊號／買進當時算好」的固定停損、停利（不會因為股價創新高就提早往上調）。
+  // 2. 一旦「股價達到停利參考」或「季線轉弱」兩者之一發生，永久切換成移動停損（hd.trailing 標記，
+  //    只會從 false 變 true，不會變回去）：之後停損跟著最高價走，停利不再設頂、讓獲利有機會繼續跑。
   function holdingStop(hd) {
-    if (hd.stopPrice != null) return hd.stopPrice;      // 使用者自訂固定停損價：不追蹤最高價
-    return peakOf(hd) * (1 - hd.stopPct / 100);          // 移動停損：跟著最高價往上調
+    if (hd.trailing) return peakOf(hd) * (1 - hd.stopPct / 100);            // 已切換：移動停損跟著最高價往上調
+    return hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100);   // 還沒切換：固定停損
   }
-  function holdingTarget(hd) {   // 原始停利參考價：用「買進當時」的風險算，不會跟著移動停損一起變動
+  function holdingTarget(hd) {   // 原始停利參考價：用「買進當時」的風險算，永遠不變（切不切換移動停損都一樣）
     if (hd.targetPrice != null) return hd.targetPrice;
     const initialStop = hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100);
     return hd.buyPrice + (hd.buyPrice - initialStop) * RR;
   }
+  function updateTrailing(hd, s) {   // 檢查是否該從「固定停損」切換成「移動停損」；已切換就不用再檢查
+    if (hd.trailing || !s) return false;
+    if (peakOf(hd) >= holdingTarget(hd) || s.tags.includes('轉弱，暫不買')) { hd.trailing = true; return true; }
+    return false;
+  }
   function holdingVerdict(hd, s) {
     if (!s) return { cls: 'st-hold', text: '查無資料（可能已下市或代號有誤）' };
     const stop = holdingStop(hd), refTarget = holdingTarget(hd), peak = peakOf(hd);
-    const c = currentPrice(hd, s), locked = peak > hd.buyPrice;
-    if (c <= stop) return { cls: 'st-stop', text: locked
+    const c = currentPrice(hd, s);
+    if (c <= stop) return { cls: 'st-stop', text: hd.trailing
       ? `觸及移動停損：現價 ${num(c)} ≤ 移動停損 ${num(stop)}（最高 ${num(peak)} 回落 ${hd.stopPct}%），建議賣出`
       : `達停損：現價 ${num(c)} ≤ 停損價 ${num(stop)}，建議賣出` };
-    if (s.tags.includes('轉弱，暫不買')) return { cls: 'st-weak', text: '季線已轉弱，尚未觸及停損，留意風險、可考慮收緊停損 %' };
-    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: '短線過熱，留意拉回；股價再創高時移動停損會自動上移' };
-    if (c >= refTarget) return { cls: 'st-target', text: `已達原始停利參考 ${num(refTarget)}：移動停損已上移到 ${num(stop)}，可依紀律賣出，或續抱讓移動停損保護獲利` };
-    return { cls: 'st-hold', text: locked ? `續抱：移動停損已上移到 ${num(stop)}（最高 ${num(peak)}）` : `續抱：介於停損 ${num(stop)} 與停利參考 ${num(refTarget)} 之間` };
+    if (hd.trailing) {
+      const why = peak >= refTarget ? '已達停利參考' : '季線轉弱';
+      return { cls: 'st-target', text: `${why}，已改採移動停損：目前上移到 ${num(stop)}（最高 ${num(peak)}），可依紀律出場或續抱讓獲利繼續跑` };
+    }
+    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: `續抱：目前用固定停損 ${num(stop)}；短線過熱留意拉回` };
+    return { cls: 'st-hold', text: `續抱：目前用固定停損 ${num(stop)}，停利參考 ${num(refTarget)}（達到，或季線轉弱，才會改用移動停損）` };
   }
   function addHolding(hd) {
-    const rec = { peak: hd.buyPrice, ...hd };
+    const rec = { peak: hd.buyPrice, trailing: false, ...hd };
     holdings.push(rec); saveHoldings(); if (fbUser) fbSetHolding(rec);
     addingHolding = false; pickedCode = null; renderHoldings(); toast('已記錄買進');
   }
@@ -364,6 +378,7 @@ __WEEKLY__
     const price = el('input', { type: 'number', step: '0.01', min: '0', placeholder: '例如 120.5' });
     const shares = el('input', { type: 'number', step: '1', min: '0', placeholder: '選填' });
     const stopPct = el('input', { type: 'number', step: '0.5', min: '1', max: '50', value: '8' });
+    const stopPrice = el('input', { type: 'number', step: '0.01', min: '0', placeholder: '留空 = 用停損% 算' });
     const target = el('input', { type: 'number', step: '0.01', min: '0', placeholder: '留空 = 自動算（風險×2）' });
     const picked = el('div', { class: 'sub', style: 'margin:0' }, pickedCode ? `已選：${pickedCode.code} ${pickedCode.name}` : '尚未選擇股票');
     const submit = () => {
@@ -373,7 +388,8 @@ __WEEKLY__
       const sp = parseFloat(stopPct.value);
       addHolding({ id: Date.now() + '-' + pickedCode.code, code: pickedCode.code, buyDate: date.value || today,
         buyPrice: bp, shares: shares.value ? Number(shares.value) : null,
-        stopPct: sp > 0 ? sp : 8, stopPrice: null, targetPrice: target.value ? parseFloat(target.value) : null });
+        stopPct: sp > 0 ? sp : 8, stopPrice: stopPrice.value ? parseFloat(stopPrice.value) : null,
+        targetPrice: target.value ? parseFloat(target.value) : null, trailing: false });
     };
     return el('div', { class: 'syncbox' },
       el('h4', {}, '記錄一筆買進'),
@@ -383,7 +399,9 @@ __WEEKLY__
         el('div', {}, el('label', {}, '買進價'), price),
         el('div', {}, el('label', {}, '股數（選填）'), shares),
         el('div', {}, el('label', {}, '停損 %'), stopPct),
+        el('div', {}, el('label', {}, '停損價（選填）'), stopPrice),
         el('div', {}, el('label', {}, '停利價（選填）'), target)),
+      el('div', { class: 'hint' }, '停損價／停利價可留空自動算，也可以貼上訊號算出的價位。價格達到停利參考、或季線轉弱之前，都用固定停損；之後才會永久改成移動停損（跟著最高價走）。'),
       el('div', { class: 'row', style: 'margin-top:10px' },
         el('button', { class: 'btn primary', onclick: submit }, '確認記錄'),
         el('button', { class: 'btn', onclick: () => { addingHolding = false; pickedCode = null; renderHoldings(); } }, '取消')));
@@ -398,7 +416,11 @@ __WEEKLY__
     box.append(el('div', { class: 'toolbar' }, el('span', { class: 'grow' }, `共 ${holdings.length} 筆${live}`)));
     if (holdings.length) {
       let changed = false;
-      holdings.forEach(hd => { if (updatePeak(hd, BY[hd.code])) { changed = true; if (fbUser) fbUpdatePeak(hd); } });
+      holdings.forEach(hd => {
+        const s = BY[hd.code];
+        const peakChanged = updatePeak(hd, s), trailingChanged = updateTrailing(hd, s);
+        if (peakChanged || trailingChanged) { changed = true; if (fbUser) fbSyncHolding(hd); }
+      });
       if (changed) saveHoldings();
       const head = el('tr', {}, ...['代號', '名稱', '買進日期', '買進價', '最高價', '現價', '損益', '移動停損', '停利參考'].map(t => el('th', { class: ['代號', '名稱'].includes(t) ? 'l' : '' }, t)),
         el('th', { class: 'l' }, '趨勢與建議'), el('th', { class: 'l' }, ''));
@@ -482,7 +504,8 @@ __WEEKLY__
         el('div', { class: 'hint' }, '登入後，觀察清單和持股會同步到你自己的帳號，換裝置登入同一個帳號就看得到，其他人看不到。不登入也完全可以用，資料只留在這個瀏覽器。'),
         el('button', { class: 'gbtn', style: 'margin-top:10px;width:100%', onclick: fbSignInGoogle }, '使用 Google 登入'),
         el('div', { class: 'orsep' }, '或用 Email'),
-        el('div', { class: 'row' }, email, pw),
+        el('div', { style: 'margin-top:8px' }, email),
+        el('div', { style: 'margin-top:8px' }, pw),
         el('div', { class: 'row' },
           el('button', { class: 'btn primary', onclick: () => fbSignInEmail(email.value.trim(), pw.value) }, '登入'),
           el('button', { class: 'btn', onclick: () => fbRegisterEmail(email.value.trim(), pw.value) }, '註冊新帳號'),
@@ -506,8 +529,8 @@ __WEEKLY__
   function fbDeleteHolding(id) {
     holdingsCol().doc(String(id)).delete().catch(e => toast('持股同步失敗：' + e.message));
   }
-  function fbUpdatePeak(hd) {
-    holdingsCol().doc(String(hd.id)).update({ peak: hd.peak }).catch(() => {});   // 失敗就算了，下次存檔還會再試
+  function fbSyncHolding(hd) {   // 最高價、是否已切換成移動停損，這兩個欄位會隨每天的資料自動更新，同步過去
+    holdingsCol().doc(String(hd.id)).update({ peak: hd.peak, trailing: !!hd.trailing }).catch(() => {});   // 失敗就算了，下次存檔還會再試
   }
 
   function detachFirestore() { fbUnsub.forEach(u => u()); fbUnsub = []; }

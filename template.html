@@ -196,8 +196,12 @@ __WEEKLY__
   // 還沒申請 Firebase 專案、或還沒填設定值時，fbReady 是 false，帳號相關功能整個不顯示，
   // 其他功能（搜尋、觀察清單、持股）完全不受影響。
   const FIREBASE_CONFIG = {
-    apiKey: "填入你的", authDomain: "填入你的", projectId: "填入你的",
-    storageBucket: "填入你的", messagingSenderId: "填入你的", appId: "填入你的",
+    apiKey: "AIzaSyB9KkCJ9uZjeRuvXZlyN0h2M2mhPn2MGaE",
+    authDomain: "stock-watchlist-440c9.firebaseapp.com",
+    projectId: "stock-watchlist-440c9",
+    storageBucket: "stock-watchlist-440c9.firebasestorage.app",
+    messagingSenderId: "307919921758",
+    appId: "1:307919921758:web:ce2827bddc40bb32314acf",
   };
   const fbReady = !!(window.firebase && FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey !== "填入你的");
   if (fbReady) firebase.initializeApp(FIREBASE_CONFIG);

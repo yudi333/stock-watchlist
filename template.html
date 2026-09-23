@@ -258,15 +258,12 @@ __WEEKLY__
   // 注意：登入帳號時完全不寫這個 key，讓它永遠是「跟帳號無關、純本機」的資料——
   // 這樣登出、換登另一個帳號時，才不會把上一個帳號的雲端資料誤當成「這台裝置本來的資料」帶過去。
   function writeLocal() { if (fbUser) return; try { localStorage.setItem(KEY, JSON.stringify(watch)); } catch (e) {} }
-  // 任何修改都走這裡：存本機，再依登入狀態決定要不要自動上傳雲端。
-  // 登入用帳號時走 Firestore（fbPushWatchlist），沒登入才走原本的 Gist 同步（markChanged），
-  // 兩者不會同時啟用，避免混淆。
-  function saveWatch() { writeLocal(); fbUser ? fbPushWatchlist() : markChanged(); }
+  // 任何修改都走這裡：存本機，登入帳號時再加寫一份到 Firestore（fbPushWatchlist）。
+  function saveWatch() { writeLocal(); if (fbUser) fbPushWatchlist(); }
   let watch = loadWatch();
   let editing = false;
   const sel = new Set();
   const open = new Set();       // 目前展開前幾天紀錄的股票
-  let syncOpen = false;         // 「同步」面板是否展開
 
   // ---------- 小工具 ----------
   function el(tag, attrs, ...kids) {
@@ -596,220 +593,12 @@ __WEEKLY__
     });
   }
 
-  // ---------- 同步：用連結或文字在電腦與手機間搬清單（不經過任何伺服器）----------
-  const CODE_RE = /^[1-9]\d{3}$/;
-  function parseCodes(text) {
-    let t = String(text || '');
-    const i = t.indexOf('#w=');
-    if (i >= 0) t = t.slice(i + 3);
-    const seen = new Set();
-    return t.split(/[\s,，、;；]+/).filter(c => CODE_RE.test(c) && !seen.has(c) && seen.add(c)).slice(0, 200);
-  }
-  const syncUrl = () => location.href.split('#')[0] + '#w=' + watch.join(',');
-  function copyText(text, input) {
-    const done = ok => toast(ok ? '已複製' : '無法自動複製，請長按連結欄手動複製');
-    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => done(true), () => { input.select(); done(false); });
-    else { input.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (e) {} done(ok); }
-  }
-  function applyImport(codes, mode) {
-    watch = mode === 'replace' ? codes.slice() : [...watch, ...codes.filter(c => !watch.includes(c))];
-    sel.clear(); saveWatch();
-    if (location.hash.startsWith('#w=')) history.replaceState(null, '', location.pathname + location.search);
-    $('banner').replaceChildren(); refresh();
-    toast(`已${mode === 'replace' ? '取代為' : '合併，共'} ${watch.length} 檔`);
-  }
-  function renderBanner() {
-    const box = $('banner'); box.replaceChildren();
-    if (!location.hash.startsWith('#w=')) return;
-    const codes = parseCodes(location.hash);
-    if (!codes.length) return;
-    const fresh = codes.filter(c => !watch.includes(c)).length;
-    box.append(el('div', { class: 'banner' },
-      el('div', {}, el('b', {}, '偵測到同步連結：'), `含 ${codes.length} 檔，其中 ${fresh} 檔不在目前的觀察清單。`),
-      el('div', { class: 'hint', style: 'color:var(--muted);font-size:12px;margin-top:2px' }, '合併 = 保留目前的並加入新的；取代 = 用連結裡的清單覆蓋目前的。'),
-      el('div', { class: 'toolbar', style: 'margin:8px 0 0' },
-        el('button', { class: 'btn primary', onclick: () => applyImport(codes, 'merge') }, '合併'),
-        el('button', { class: 'btn', onclick: () => applyImport(codes, 'replace') }, '取代'),
-        el('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname + location.search); box.replaceChildren(); } }, '略過'))));
-  }
-  // ---------- 雲端自動同步（GitHub Gist）----------
-  // 清單存在你自己的「不公開 Gist」裡。固定連結 = 網址 + #g=Gist的ID，之後永遠不用換。
-  // token 只存在這個瀏覽器，只需要 gist 權限；只想「看」的裝置完全不需要 token。
-  const SWKEY = 'stock_watchlist_cloud_v1';
-  const GIST_FILE = 'watchlist.json';
-  const ID_RE = /^[0-9a-f]{20,40}$/i;
-  const GH = window.GH_API || 'https://api.github.com';
-  let sw = loadSW();                    // {id, token, base, dirty}；null = 沒啟用
-  let cloudMsg = '', pushTimer = null, tokenBad = false;   // tokenBad：token 過期或無效
-  class Conflict extends Error { constructor(r) { super('雲端清單在別的裝置被修改過'); this.remote = r; } }
-  function loadSW() { try { const v = JSON.parse(localStorage.getItem(SWKEY)); if (v && ID_RE.test(v.id || '')) return v; } catch (e) {} return null; }
-  function saveSW() { try { sw ? localStorage.setItem(SWKEY, JSON.stringify(sw)) : localStorage.removeItem(SWKEY); } catch (e) {} }
-  const cloudLabel = () => (cloudMsg || (sw && sw.token ? '已連線' : '唯讀')) + (sw && sw.token && tokenBad ? '（token 已失效，請在「同步」面板更換）' : '');
-  const cloudText = () => (sw ? '　·　雲端：' + cloudLabel() : '');
-  function setCloud(msg) {
-    cloudMsg = msg;
-    document.querySelectorAll('.cloudmsg').forEach(e => e.textContent = cloudText());
-    document.querySelectorAll('.cloudmsg-p').forEach(e => e.textContent = cloudLabel());
-  }
-  async function gh(path, { method = 'GET', body, token = sw && sw.token } = {}) {
-    const headers = { Accept: 'application/vnd.github+json' };
-    if (token) headers.Authorization = 'Bearer ' + token;
-    if (body) headers['Content-Type'] = 'application/json';
-    let res;
-    try { res = await fetch(GH + path, { method, headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined }); }
-    catch (e) { throw new Error('連不上 GitHub，請檢查網路'); }
-    if (res.status === 401) {
-      if (token) tokenBad = true;
-      if (token && method === 'GET') return gh(path, { method, body, token: null });   // GitHub 連讀取也會拒絕壞掉的 token，改用不帶 token 的讀取
-      throw new Error('token 無效或已過期');
-    }
-    if (res.status === 403) throw new Error('沒有權限，或次數已達上限（token 需要 gist 權限）');
-    if (res.status === 404) throw new Error('找不到這份雲端清單（連結錯誤或已被刪除）');
-    if (!res.ok) throw new Error('GitHub 回應錯誤 ' + res.status);
-    return res.json();
-  }
-  async function readRemote(id) {
-    const g = await gh('/gists/' + id);
-    const f = g.files && g.files[GIST_FILE];
-    if (!f) throw new Error('雲端清單的格式不對');
-    let text = f.content;
-    if (f.truncated) text = await (await fetch(f.raw_url, { cache: 'no-store' })).text();
-    const o = JSON.parse(text);
-    return { codes: parseCodes((o.codes || []).join(',')), updated: Number(o.updated) || 0 };
-  }
-  async function pushNow(force) {
-    if (!sw || !sw.token) return;
-    if (!force) { const r = await readRemote(sw.id); if (r.updated !== sw.base) throw new Conflict(r); }   // 先確認沒被別台改過，避免蓋掉
-    const p = { v: 1, updated: Date.now(), codes: watch.slice() };
-    await gh('/gists/' + sw.id, { method: 'PATCH', body: { files: { [GIST_FILE]: { content: JSON.stringify(p) } } } });
-    sw.base = p.updated; sw.dirty = false; tokenBad = false; saveSW();
-  }
-  function markChanged() {                // 本機清單被修改後呼叫
-    if (!sw) return;
-    sw.dirty = true; saveSW();
-    if (!sw.token) { setCloud('唯讀：修改尚未上傳'); return; }
-    setCloud('同步中…'); clearTimeout(pushTimer);
-    pushTimer = setTimeout(async () => {
-      try { await pushNow(); setCloud('已同步'); }
-      catch (e) { if (e instanceof Conflict) { setCloud('有衝突'); showConflict(e.remote); } else setCloud('同步失敗：' + e.message); }
-    }, 1200);                             // 連續修改只上傳一次
-  }
-  function adopt(r) {                     // 用雲端的清單覆蓋本機
-    watch = r.codes.slice(); writeLocal(); sw.base = r.updated; sw.dirty = false; saveSW();
-    $('banner').replaceChildren(); refresh(); setCloud('已同步');
-  }
+  // ---------- 共用的小工具：Firebase 的「匯入到帳號」提示會用到 ----------
+  // （原本也給已移除的 GitHub Gist 手動同步用；Gist 同步整套已拿掉，
+  //   現在觀察清單／持股的跨裝置同步一律走「帳號登入」，見上面的 Firebase 區塊）
   const bannerBtns = (...b) => el('div', { class: 'toolbar', style: 'margin:8px 0 0' }, b);
   const hint = t => el('div', { style: 'color:var(--muted);font-size:12px;margin-top:2px' }, t);
   function showBanner(...kids) { $('banner').replaceChildren(el('div', { class: 'banner' }, kids)); }
-  function showConflict(r) {
-    showBanner(el('div', {}, el('b', {}, '雲端清單在別的裝置被修改過'), `（雲端 ${r.codes.length} 檔），而這裡也有還沒上傳的修改。`),
-      hint('要保留哪一邊？另一邊的修改會被覆蓋。'),
-      bannerBtns(el('button', { class: 'btn primary', onclick: () => { adopt(r); toast('已改用雲端的清單'); } }, '用雲端的（放棄這裡的修改）'),
-        el('button', { class: 'btn', onclick: async () => { sw.base = r.updated; try { await pushNow(true); $('banner').replaceChildren(); setCloud('已同步'); toast('已用這裡的清單覆蓋雲端'); } catch (e) { setCloud('同步失敗：' + e.message); } } }, '用這裡的（覆蓋雲端）')));
-  }
-  async function syncOnLoad() {           // 開啟頁面時：拉最新；必要時上傳
-    if (!sw) return;
-    setCloud('讀取中…');
-    try {
-      const r = await readRemote(sw.id);
-      if (!sw.dirty) { if (r.updated !== sw.base) { adopt(r); toast('已載入雲端最新清單'); } setCloud('已同步'); }
-      else if (!sw.token) {
-        setCloud('唯讀：本機有未上傳的修改');
-        showBanner(el('div', {}, el('b', {}, '這台沒有 token，本機的修改無法上傳。')),
-          bannerBtns(el('button', { class: 'btn primary', onclick: () => { adopt(r); toast('已改用雲端的清單'); } }, '用雲端清單覆蓋本機'),
-            el('button', { class: 'btn', onclick: () => $('banner').replaceChildren() }, '先保留本機')));
-      } else if (r.updated === sw.base) { await pushNow(); setCloud('已同步'); }
-      else { setCloud('有衝突'); showConflict(r); }
-    } catch (e) { setCloud('讀取失敗：' + e.message); }
-  }
-  async function linkCloud() {            // 打開了 #g=ID 固定連結
-    const id = location.hash.slice(3).trim();
-    $('banner').replaceChildren();
-    if (!ID_RE.test(id)) { toast('固定連結的 ID 格式不對'); return; }
-    if (sw && sw.id === id) return;       // 已經連著這份，交給自動同步
-    try {
-      const r = await readRemote(id);
-      const canEdit = !!(sw && sw.token);
-      showBanner(el('div', {}, el('b', {}, '偵測到雲端清單：'), `含 ${r.codes.length} 檔。`),
-        hint(canEdit ? '取代 = 用雲端的覆蓋這台；合併 = 保留這台的並加入雲端的。' : '這台沒有 token，只能讀取；要在這裡也能修改，之後在「同步」面板貼上 token。'),
-        bannerBtns(el('button', { class: 'btn primary', onclick: () => connect(id, r, 'replace') }, '取代本機並開始同步'),
-          canEdit ? el('button', { class: 'btn', onclick: () => connect(id, r, 'merge') }, '合併後開始同步') : null,
-          el('button', { class: 'btn', onclick: () => $('banner').replaceChildren() }, '略過')));
-    } catch (e) { toast(e.message); }
-  }
-  function connect(id, r, mode) {
-    const token = sw && sw.token;
-    watch = mode === 'merge' ? [...r.codes, ...watch.filter(c => !r.codes.includes(c))] : r.codes.slice();
-    writeLocal(); sw = { id, token, base: r.updated, dirty: mode === 'merge' && watch.length !== r.codes.length };
-    saveSW(); $('banner').replaceChildren(); refresh();
-    sw.dirty ? markChanged() : setCloud('已同步');
-    toast('已連上雲端清單');
-  }
-  async function enableCloud(token) {     // 第一次設定：用 token 建立不公開的 Gist
-    token = String(token || '').trim();
-    if (!token) return toast('請先貼上 token');
-    toast('建立雲端清單中…');
-    try {
-      const p = { v: 1, updated: Date.now(), codes: watch.slice() };
-      const g = await gh('/gists', { method: 'POST', token, body: { description: '台股觀察清單同步（自動產生，請勿手動刪除）', public: false, files: { [GIST_FILE]: { content: JSON.stringify(p) } } } });
-      sw = { id: g.id, token, base: p.updated, dirty: false }; saveSW(); setCloud('已同步'); refresh(); toast('雲端同步已啟用');
-    } catch (e) { toast(e.message); }
-  }
-  async function setToken(token) {        // 只讀的裝置補貼 token，開啟修改
-    token = String(token || '').trim();
-    if (!token) return toast('請先貼上 token');
-    const old = sw.token; sw.token = token; saveSW();
-    try { await pushNow(); setCloud('已同步'); refresh(); toast(old ? '已更換 token' : '已設定 token，這台也能修改了'); }
-    catch (e) { if (e instanceof Conflict) { setCloud('有衝突'); showConflict(e.remote); refresh(); } else { sw.token = old; saveSW(); toast(e.message); } }
-  }
-  function stopCloud() { sw = null; saveSW(); setCloud(''); refresh(); toast('已停止雲端同步（清單仍保留在這台）'); }
-  function route() { location.hash.startsWith('#g=') ? linkCloud() : renderBanner(); }
-  function cloudSection() {
-    if (fbUser) {   // 登入帳號時以帳號同步為主，避免跟 Gist 同步的「哪一個才是真的」混淆
-      return el('div', {}, el('h4', {}, '雲端自動同步'),
-        el('div', { class: 'hint' }, `已用帳號（${fbUser.email || fbUser.displayName || ''}）同步，換裝置登入同一個帳號就會自動看到最新清單，不需要另外設定。`));
-    }
-    if (!sw) {
-      const tk = el('input', { type: 'password', placeholder: '貼上 token（ghp_…）', autocomplete: 'off' });
-      return el('div', {},
-        el('h4', {}, '雲端自動同步（推薦）'),
-        el('div', { class: 'hint' }, '設定一次後，連結永遠不變：另一台打開連結就是最新清單；在這台加入、移除也會自動存上去。清單存在你自己的「不公開 Gist」裡。'),
-        el('div', { class: 'hint' }, '第一次在電腦設定：① ', el('a', { href: 'https://github.com/settings/tokens/new?scopes=gist&description=stock-watchlist-sync', target: '_blank', rel: 'noopener' }, '按此建立 token'), '（只勾 gist、建議設 90 天到期，建立後馬上複製）　② 貼在下面按「啟用」。'),
-        el('div', { class: 'row' }, tk, el('button', { class: 'btn primary', onclick: () => enableCloud(tk.value) }, '啟用雲端同步')),
-        el('div', { class: 'hint' }, '手機只想看：不需要 token，打開電腦上啟用後產生的「固定連結」就會自動載入最新清單。'));
-    }
-    const link = el('input', { type: 'text', readonly: 'readonly', value: location.href.split('#')[0] + '#g=' + sw.id, onclick: e => e.target.select() });
-    const tk = el('input', { type: 'password', placeholder: sw.token ? '要更換 token 時貼在這裡（到期後重新建立）' : '貼上 token，讓這台也能修改', autocomplete: 'off' });
-    return el('div', {},
-      el('h4', {}, '雲端自動同步'),
-      el('div', { class: 'hint' }, '狀態：', el('b', { class: 'cloudmsg-p' }, cloudLabel()), sw.token ? '（這台可修改，會自動上傳）' : '（這台只能讀取，在這裡的修改不會上傳）'),
-      el('div', { class: 'hint', style: 'margin-top:8px' }, '固定連結：傳到其他裝置、放進書籤或短網址都行，內容會自動是最新的。不知道連結的人找不到這份清單，請別公開貼出。'),
-      el('div', { class: 'row' }, link,
-        el('button', { class: 'btn primary', onclick: () => copyText(link.value, link) }, '複製連結'),
-        navigator.share ? el('button', { class: 'btn', onclick: () => navigator.share({ title: '我的台股觀察清單', url: link.value }).catch(() => {}) }, '分享') : null),
-      el('div', { class: 'row' },
-        el('button', { class: 'btn', onclick: () => syncOnLoad() }, '立即同步'),
-        el('button', { class: 'btn', onclick: () => { if (confirm('停止雲端同步？這台的清單會保留，但不再與雲端連動。')) stopCloud(); } }, '停止雲端同步')),
-      el('div', { class: 'row' }, tk, el('button', { class: 'btn', onclick: () => setToken(tk.value) }, sw.token ? '更換 token' : '設定 token')));
-  }
-
-  function syncPanel() {
-    const url = el('input', { type: 'text', readonly: 'readonly', value: syncUrl(), onclick: e => e.target.select() });
-    const ta = el('textarea', { placeholder: '貼上同步連結，或股票代號（用逗號、空白或換行分隔）' });
-    const imp = mode => { const c = parseCodes(ta.value); c.length ? applyImport(c, mode) : toast('沒有辨識到股票代號（要 4 碼數字）'); };
-    return el('div', { class: 'syncbox' },
-      cloudSection(),
-      el('h4', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--line)' }, '手動同步（不需要帳號）'),
-      el('div', { class: 'hint' }, '把下面的連結傳到另一台（LINE、AirDrop、備忘錄都行），打開後選「合併」或「取代」。連結裡只有股票代號。'),
-      el('div', { class: 'row' }, url,
-        el('button', { class: 'btn primary', onclick: () => copyText(url.value, url) }, '複製連結'),
-        navigator.share ? el('button', { class: 'btn', onclick: () => navigator.share({ title: '我的台股觀察清單', url: url.value }).catch(() => {}) }, '分享') : null),
-      el('h4', { style: 'margin-top:14px' }, '從文字或連結匯入'),
-      el('div', { class: 'row' }, ta),
-      el('div', { class: 'row' },
-        el('button', { class: 'btn', onclick: () => imp('merge') }, '匯入（合併）'),
-        el('button', { class: 'btn', onclick: () => imp('replace') }, '匯入（取代）')));
-  }
 
   // ---------- 我的觀察清單 ----------
   const WD = ['日', '一', '二', '三', '四', '五', '六'];
@@ -834,9 +623,8 @@ __WEEKLY__
     const bar = el('div', { class: 'toolbar' });
     if (!editing) {
       const allOpen = watch.length && watch.every(c => open.has(c) || !BY[c]);
-      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔　·　最新 ${D.date}　·　點股票名稱展開前 6 個交易日${D.recorded && D.recorded.length ? `　·　已記錄 ${D.recorded.length} 天（自 ${D.recorded[0]}）` : ''}`, el('span', { class: 'cloudmsg' }, cloudText())),
+      bar.append(el('span', { class: 'grow' }, `共 ${watch.length} 檔　·　最新 ${D.date}　·　點股票名稱展開前 6 個交易日${D.recorded && D.recorded.length ? `　·　已記錄 ${D.recorded.length} 天（自 ${D.recorded[0]}）` : ''}`),
                  el('button', { class: 'btn', onclick: () => { allOpen ? open.clear() : watch.forEach(c => open.add(c)); renderWatch(); } }, allOpen ? '全部收合' : '全部展開'),
-                 el('button', { class: 'btn' + (syncOpen ? ' primary' : ''), onclick: () => { syncOpen = !syncOpen; renderWatch(); } }, '同步'),
                  el('button', { class: 'btn', onclick: () => { editing = true; sel.clear(); renderWatch(); } }, '編輯'));
     } else {
       const all = watch.length && sel.size === watch.length;
@@ -846,7 +634,6 @@ __WEEKLY__
         el('button', { class: 'btn primary', onclick: () => { editing = false; sel.clear(); renderWatch(); } }, '完成'));
     }
     box.append(bar);
-    if (syncOpen && !editing) box.append(syncPanel());
     if (!watch.length) {
       box.append(el('div', { class: 'tablewrap' }, el('div', { class: 'empty' }, '清單是空的。用上方的搜尋欄找股票，按「加入觀察清單」。')));
     } else {
@@ -950,9 +737,6 @@ __WEEKLY__
   refresh();
   renderHoldings();
   loadQuotes();
-  route();
-  if (sw && !(location.hash.startsWith('#g=') && location.hash.slice(3) !== sw.id)) syncOnLoad();
-  window.addEventListener('hashchange', route);
   if (fbReady) auth.onAuthStateChanged(user => {   // 放在最後，跟其他初始化呼叫一起，避免依賴到還沒宣告的變數
     detachFirestore();
     fbGen++;                // 世代推進：這之後才觸發的舊監聽回呼，會比對失敗而被丟棄

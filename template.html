@@ -37,6 +37,11 @@ table.picks td:nth-child(4){min-width:140px}
 .links a:hover{color:var(--text)}
 .empty{color:var(--muted);padding:14px 12px}
 .note{color:var(--muted);font-size:12px;margin-top:28px}
+.legal{color:var(--muted);font-size:13px}
+.legal p{margin:0 0 10px}
+.legal ul{margin:0 0 10px;padding-left:20px}
+.legal li{margin-bottom:6px}
+.legal b{color:var(--text)}
 /* 按鈕 */
 .btn{font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);
 background:var(--card);color:var(--text);cursor:pointer}
@@ -178,9 +183,38 @@ __DAILY__
 <div class="sub">同一套訊號改用週線偵測，較適合抱久一點；週五收盤後的結果是整週完整資料。</div>
 __WEEKLY__
 
-<p class="note">僅為資料分析，不是投資建議，本站不提供下單。資料來自 Yahoo Finance 與證交所／櫃買中心，可能延遲。
-型態辨識是程式規則近似，買進前請自己看 K 線圖確認。<br>
-我的觀察清單存在<b>這個瀏覽器</b>裡，不會上傳，換裝置或清除網站資料時不會跟著走。</p>
+<details class="fold"><summary>免責聲明</summary>
+<div class="legal">
+<p>本服務（以下稱「本網站」）提供的所有資訊——包括但不限於股價、技術指標、買進訊號、候選股清單、
+三大法人買賣超、大盤強弱等——均由自動化程式依公開資料計算而得，<b>僅供參考與教育用途，
+不構成任何形式的投資建議、要約或勸誘</b>。</p>
+<ul>
+<li>過去的訊號表現或歷史資料，不保證未來的績效或準確性；型態辨識（杯柄、三角收斂等）是程式規則近似，
+非精確判讀，請自行檢視 K 線圖並查證後再做決定。</li>
+<li>本網站<b>不提供下單、開戶或任何交易執行功能</b>，未連接、也不會連接任何券商帳戶。</li>
+<li>資料來自 Yahoo Finance、證交所、櫃買中心、鉅亨網等第三方公開來源，可能因來源延遲、
+介面改版或技術限制而有誤差、缺漏或不即時。</li>
+<li>所有投資決策應由使用者本人審慎評估並自負盈虧；對於任何因使用本網站資訊而產生的直接或間接損失，
+開發者不負任何責任。</li>
+<li>本網站由個人開發、免費提供，不保證服務的持續性、穩定性或不中斷運作，內容與功能可能隨時調整或終止。</li>
+</ul>
+</div>
+</details>
+
+<details class="fold"><summary>隱私權聲明</summary>
+<div class="legal">
+<p><b>不登入即可使用的功能</b>——觀察清單、持股記錄等資料，預設只存在你目前使用的瀏覽器
+（localStorage），不會傳送到任何伺服器，開發者看不到、也拿不到這些內容。</p>
+<p><b>登入帳號後</b>——你的觀察清單與持股會另外存放在 Google Firebase 的雲端資料庫（Firestore），
+並以安全規則限制為<b>僅限本人存取</b>，開發者不會、也無法主動查看任何使用者的資料內容。
+帳號驗證由 Firebase Authentication 處理，密碼本身不會經過本網站或被本網站儲存。</p>
+<p><b>第三方資料來源</b>——本網站會即時向下列公開來源請求股市資訊：Yahoo Finance、
+台灣證券交易所、證券櫃檯買賣中心、鉅亨網。這些請求只用來取得報價與交易資料，
+不會夾帶任何可識別使用者身分的資訊。</p>
+<p><b>刪除資料</b>——你可以隨時登出、清除瀏覽器資料，或聯絡開發者要求刪除你的帳號與所有雲端資料。</p>
+<p>如對本聲明或資料使用方式有任何疑問，歡迎透過 GitHub 聯絡開發者。</p>
+</div>
+</details>
 </main>
 <div id="toast" class="toast"></div>
 
@@ -217,7 +251,9 @@ __WEEKLY__
     try { const v = JSON.parse(localStorage.getItem(KEY)); if (Array.isArray(v)) return v.map(String); } catch (e) {}
     return D.default_watchlist.slice();
   }
-  function writeLocal() { try { localStorage.setItem(KEY, JSON.stringify(watch)); } catch (e) {} }
+  // 注意：登入帳號時完全不寫這個 key，讓它永遠是「跟帳號無關、純本機」的資料——
+  // 這樣登出、換登另一個帳號時，才不會把上一個帳號的雲端資料誤當成「這台裝置本來的資料」帶過去。
+  function writeLocal() { if (fbUser) return; try { localStorage.setItem(KEY, JSON.stringify(watch)); } catch (e) {} }
   // 任何修改都走這裡：存本機，再依登入狀態決定要不要自動上傳雲端。
   // 登入用帳號時走 Firestore（fbPushWatchlist），沒登入才走原本的 Gist 同步（markChanged），
   // 兩者不會同時啟用，避免混淆。
@@ -273,7 +309,8 @@ __WEEKLY__
   const HKEY = 'stock_watchlist_holdings_v1';
   const RR = 2.0;   // 「原始停利參考」用「風險的 2 倍」，跟課程的賺賠比 2:1 一致（僅供參考，不是強制出場點）
   function loadHoldings() { try { const v = JSON.parse(localStorage.getItem(HKEY)); if (Array.isArray(v)) return v; } catch (e) {} return []; }
-  function saveHoldings() { try { localStorage.setItem(HKEY, JSON.stringify(holdings)); } catch (e) {} }
+  // 同樣道理：登入帳號時不寫這個 key，避免登出、換登另一個帳號時把上一個帳號的持股帶過去。
+  function saveHoldings() { if (fbUser) return; try { localStorage.setItem(HKEY, JSON.stringify(holdings)); } catch (e) {} }
   let holdings = loadHoldings();
   let addingHolding = false;
   let pickedCode = null;   // 新增表單裡目前選到的股票代號

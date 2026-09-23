@@ -279,7 +279,8 @@ def market_status():
         else:
             text = "偏弱：加權指數跌破季線，個股上漲機會較小，買進請更保守"
         date = c.index[-1].strftime("%Y-%m-%d")
-        info = {"date": date, "close": round(float(c.iloc[-1]), 2),
+        chg_pct = round((c.iloc[-1] / c.iloc[-2] - 1) * 100, 2) if len(c) >= 2 else None
+        info = {"date": date, "close": round(float(c.iloc[-1]), 2), "chg_pct": chg_pct,
                 "ma20": round(float(ma20), 2), "ma60": round(float(ma60), 2), "text": text}
         otc = fetch_otc_index()
         if otc:

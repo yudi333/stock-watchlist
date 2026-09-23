@@ -157,27 +157,38 @@ def main():
     try:
         m = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))
         live_night = fetch_live_night()          # 延續 night_futures.py 每天早上更新的夜盤，不被這次蓋掉
-        if live_night:
+        if isinstance(live_night, dict) and "label" in live_night:
             m["night"] = live_night
+        elif "night" in m and "label" not in m["night"]:
+            m.pop("night", None)   # 改版前的舊格式（TAIFEX 資料，用 month 欄位），先拿掉避免顯示出錯，
+                                    # 等 night_futures.py 下次跑完就會補上新格式
         (SITE_DIR / "market.json").write_text(
             json.dumps(m, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+        def pct_badge(pct):   # 統一的漲跌 %：紅色▲／綠色▼，跟觀察清單、持股的顏色邏輯一致
+            arrow, cls = ("▲", "up") if pct > 0 else (("▼", "down") if pct < 0 else ("－", ""))
+            return f'<span class="{cls}">{arrow} {abs(pct)}%</span>'
+
         rows = [f'<div><b>日期</b>：{m["date"]}</div>',
-                f'<div><b>大盤</b>：加權 {m["close"]:,.0f}（月線 {m["ma20"]:,.0f}／季線 {m["ma60"]:,.0f}）'
-                f'{html.escape(m["text"])}</div>']
-        # 櫃買、夜盤都是「現價快照」，Yahoo／TAIFEX 沒提供完整歷史資料，只能顯示現價漲跌，
-        # 不像大盤（加權指數）能算月線/季線判斷多空；抓不到就不顯示，不影響大盤那一行
-        if "otc" in m:
-            d = m["otc"]
-            arrow, cls = ("▲", "up") if d["chg_pct"] > 0 else (("▼", "down") if d["chg_pct"] < 0 else ("－", ""))
-            rows.append(f'<div><b>櫃買</b>：{d["close"]:,.2f}　'
-                        f'<span class="{cls}">{arrow} {abs(d["chg_pct"])}%</span></div>')
-        if "night" in m:
-            d = m["night"]
-            arrow, cls = ("▲", "up") if d["chg_pct"] > 0 else (("▼", "down") if d["chg_pct"] < 0 else ("－", ""))
-            rows.append(f'<div><b>夜盤</b>：{d["month"]}台指期 {d["close"]:,.0f}　'
-                        f'<span class="{cls}">{arrow} {abs(d["chg_pct"])}%</span>　'
-                        f'<small style="color:var(--muted)">（{d["date"]} 夜盤，官方資料沒有查詢特定日期的功能，'
-                        f'只給目前最新一筆，可能不是最新一個交易日）</small></div>')
+                f'<div><b>大盤</b>：加權 {m["close"]:,.0f}'
+                + (f'　{pct_badge(m["chg_pct"])}' if m.get("chg_pct") is not None else '')
+                + f'（月線 {m["ma20"]:,.0f}／季線 {m["ma60"]:,.0f}）{html.escape(m["text"])}</div>']
+        # 櫃買、夜盤都是「現價快照」，Yahoo 沒提供完整歷史資料，只能顯示現價漲跌，不像大盤（加權指數）
+        # 能算月線/季線判斷多空；個別欄位格式不對就跳過那一行，不影響日期/大盤這兩行一定會顯示
+        try:
+            if "otc" in m:
+                d = m["otc"]
+                rows.append(f'<div><b>櫃買</b>：{d["close"]:,.2f}　{pct_badge(d["chg_pct"])}</div>')
+        except Exception:
+            pass
+        try:
+            if "night" in m:
+                d = m["night"]
+                rows.append(f'<div><b>夜盤</b>：{d["label"]} {d["close"]:,.0f}　{pct_badge(d["chg_pct"])}　'
+                            f'<small style="color:var(--muted)">（{d["date"]} 夜盤，資料來源 Yahoo奇摩股市，'
+                            f'跟其他看盤軟體可能有小差異）</small></div>')
+        except Exception:
+            pass
         # id="market"：讓網頁載入後，client 端 JS 再讀一次 market.json 覆蓋這裡的內容，
         # 這樣才會抓到 night_futures.py 在網頁「這次產生之後」才更新的夜盤（見 template.html 的 loadMarket()）
         market_html = f'<div class="market" id="market">{"".join(rows)}</div>'

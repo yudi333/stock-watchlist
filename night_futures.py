@@ -7,36 +7,73 @@ night 欄位，其他欄位（大盤、櫃買，由 screener.py 算好）維持�
 盤中價格，不是最終結果。改成每天早上 8 點（留了緩衝時間）單獨抓一次，這時候昨晚的夜盤已經
 收盤，才是「跑完整晚」的最終結果。
 
-資料來源：官方 TAIFEX OpenAPI（https://openapi.taifex.com.tw/），近月台指期（TX）合約的
-盤後交易。這個 API 沒有「查詢特定日期」的功能，只給「目前最新一筆」——多數時候就是昨晚，
-但官方系統偶爾會延遲一兩個交易時段，抓到的可能不是最新的；網頁會照實顯示那筆資料的實際
-交易日期，不會假裝是今天。
+資料來源：Yahoo奇摩股市「台指期近一（WTX&）」頁面——這是日盤＋夜盤合一的連續合約（不是
+分開的兩個商品），頁面內嵌一段可以直接解析的 JSON，用簡單的 HTTP GET 就能拿到，不需要像
+wantgoo 那樣處理 WebSocket 即時推播（試過，那個沒辦法用簡單的排程腳本抓）。05:00 收盤到
+隔天 09:00 開盤這段沒有新成交，數字會停在夜盤最後一筆，這也是為什麼要在這段時間抓。
+
+跟其他看盤網站（例如 wantgoo）的數字可能會有幾十到幾百點的小差異，是不同資料商本來就會有的
+正常現象，不是抓錯。
 
 用法：python night_futures.py [market.json 路徑，預設 market.json]
 """
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+YAHOO_URL = "https://tw.stock.yahoo.com/future/WTX%26"
+
+
+def _extract_json_object(text, key):
+    """從 HTML 裡的一大段內嵌 JS 物件中，挖出 "key": {...} 這個子物件（用括號配對找結尾，
+    比正規表示式可靠——嵌套很深，正規表示式抓不出正確的結尾位置）。找不到就回傳 None。"""
+    idx = text.find(f'"{key}":')
+    if idx < 0:
+        return None
+    start = text.index("{", idx)
+    depth = in_str = esc = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                frag = text[start:i + 1]
+                return json.loads(frag.replace(":undefined", ":null"))
+    return None
 
 
 def fetch_night_futures():
-    """近月台指期（TX）的盤後（夜盤）交易：抓不到、或近月合約還沒有盤後成交就回傳 None。"""
+    """抓不到、或欄位對不起來就回傳 None。"""
     try:
-        r = requests.get("https://openapi.taifex.com.tw/v1/DailyMarketReportFut", headers=HEADERS, timeout=20)
+        r = requests.get(YAHOO_URL, headers=HEADERS, timeout=20)
         r.raise_for_status()
-        rows = [d for d in r.json() if d.get("Contract") == "TX" and d.get("TradingSession") == "盤後"
-                and d.get("Last") not in (None, "-", "NULL")]
-        if not rows:
+        fundamental = _extract_json_object(r.text, "QuoteFundamental")
+        if not fundamental:
             return None
-        near = min(rows, key=lambda d: d["ContractMonth(Week)"])
-        d = near["Date"]
-        return {"date": f"{d[:4]}-{d[4:6]}-{d[6:]}", "month": near["ContractMonth(Week)"][4:] + "月",
-                "close": float(near["Last"]), "chg_pct": float(near["%"].rstrip("%"))}
+        q = fundamental["quote"]["data"]
+        close = float(q["price"]["raw"])
+        chg_pct = float(q["changePercent"].rstrip("%"))
+        ts = datetime.fromisoformat(q["regularMarketTime"].replace("Z", "+00:00"))
+        ts = ts.astimezone(timezone(timedelta(hours=8)))
+        return {"date": ts.strftime("%Y-%m-%d"), "label": q.get("symbolName") or "台指期近一",
+                "close": close, "chg_pct": chg_pct}
     except Exception as e:
         print(f"[注意] 抓不到台指期夜盤：{e}")
         return None
@@ -60,7 +97,7 @@ def main():
     market["night"] = night
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(market, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"已更新夜盤：{night['month']}台指期 {night['close']:,.0f}（{night['chg_pct']:+.2f}%），資料日期 {night['date']}")
+    print(f"已更新夜盤：{night['label']} {night['close']:,.0f}（{night['chg_pct']:+.2f}%），資料日期 {night['date']}")
     return 0
 
 

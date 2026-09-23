@@ -185,8 +185,7 @@ def main():
             if "night" in m:
                 d = m["night"]
                 rows.append(f'<div><b>夜盤</b>：{d["label"]} {d["close"]:,.0f}　{pct_badge(d["chg_pct"])}　'
-                            f'<small style="color:var(--muted)">（{d["date"]} 夜盤，資料來源 Yahoo奇摩股市，'
-                            f'跟其他看盤軟體可能有小差異）</small></div>')
+                            f'<small style="color:var(--muted)">（{d["date"]} 收盤）</small></div>')
         except Exception:
             pass
         # id="market"：讓網頁載入後，client 端 JS 再讀一次 market.json 覆蓋這裡的內容，

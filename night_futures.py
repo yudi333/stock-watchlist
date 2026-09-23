@@ -72,8 +72,7 @@ def fetch_night_futures():
         chg_pct = float(q["changePercent"].rstrip("%"))
         ts = datetime.fromisoformat(q["regularMarketTime"].replace("Z", "+00:00"))
         ts = ts.astimezone(timezone(timedelta(hours=8)))
-        return {"date": ts.strftime("%Y-%m-%d"), "label": q.get("symbolName") or "台指期近一",
-                "close": close, "chg_pct": chg_pct}
+        return {"date": ts.strftime("%Y-%m-%d"), "label": "台指期盤後一", "close": close, "chg_pct": chg_pct}
     except Exception as e:
         print(f"[注意] 抓不到台指期夜盤：{e}")
         return None

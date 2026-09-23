@@ -313,8 +313,7 @@ __WEEKLY__
     try {
       if (m.night && m.night.label) rows.push(el('div', {}, el('b', {}, '夜盤'), `：${m.night.label} ${num(m.night.close, 0)}　`,
         badge(m.night.chg_pct), '　',
-        el('small', { style: 'color:var(--muted)' },
-          `（${m.night.date} 夜盤，資料來源 Yahoo奇摩股市，跟其他看盤軟體可能有小差異）`)));
+        el('small', { style: 'color:var(--muted)' }, `（${m.night.date} 收盤）`)));
     } catch (e) {}
     box.replaceChildren(...rows);
   }

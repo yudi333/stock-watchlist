@@ -292,6 +292,38 @@ __WEEKLY__
   let pickedCode = null;   // 新增表單裡目前選到的股票代號
   let LIVE = {}, LIVE_TIME = null;   // 盤中報價（quotes.json）；抓不到就沿用收盤價，不影響其他功能
 
+  // 最上方的「日期／大盤／櫃買／夜盤」：網頁產生當下已經是靜態內容，這裡另外讀一次 market.json
+  // 蓋過去，才會抓到 night_futures.py 在「網頁這次產生之後」才另外更新的夜盤（見 build_site.py 的說明）；
+  // 抓不到就維持網頁產生時的內容，不用提示。
+  function renderMarketBox(m) {
+    const box = $('market'); if (!box || !m) return;
+    const dir = (v) => v > 0 ? ['▲', 'up'] : v < 0 ? ['▼', 'down'] : ['－', ''];
+    const rows = [
+      el('div', {}, el('b', {}, '日期'), '：' + m.date),
+      el('div', {}, el('b', {}, '大盤'), `：加權 ${num(m.close, 0)}（月線 ${num(m.ma20, 0)}／季線 ${num(m.ma60, 0)}）${m.text}`),
+    ];
+    if (m.otc) {
+      const [arrow, cls] = dir(m.otc.chg_pct);
+      rows.push(el('div', {}, el('b', {}, '櫃買'), `：${num(m.otc.close)}　`,
+        el('span', { class: cls }, `${arrow} ${Math.abs(m.otc.chg_pct)}%`)));
+    }
+    if (m.night) {
+      const [arrow, cls] = dir(m.night.chg_pct);
+      rows.push(el('div', {}, el('b', {}, '夜盤'), `：${m.night.month}台指期 ${num(m.night.close, 0)}　`,
+        el('span', { class: cls }, `${arrow} ${Math.abs(m.night.chg_pct)}%`), '　',
+        el('small', { style: 'color:var(--muted)' },
+          `（${m.night.date} 夜盤，官方資料沒有查詢特定日期的功能，只給目前最新一筆，可能不是最新一個交易日）`)));
+    }
+    box.replaceChildren(...rows);
+  }
+  async function loadMarket() {
+    try {
+      const r = await fetch('market.json?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      renderMarketBox(await r.json());
+    } catch (e) { /* 抓不到就維持網頁產生時的內容，不用提示 */ }
+  }
+
   async function loadQuotes() {
     try {
       const r = await fetch('quotes.json?t=' + Date.now(), { cache: 'no-store' });
@@ -743,6 +775,7 @@ __WEEKLY__
   refresh();
   renderHoldings();
   loadQuotes();
+  loadMarket();
   if (fbReady) auth.onAuthStateChanged(user => {   // 放在最後，跟其他初始化呼叫一起，避免依賴到還沒宣告的變數
     detachFirestore();
     fbGen++;                // 世代推進：這之後才觸發的舊監聽回呼，會比對失敗而被丟棄

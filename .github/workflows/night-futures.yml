@@ -1,0 +1,57 @@
+# 每天早上（台灣時間約 08:03）單獨更新一次台指期夜盤，其他部分不動。
+#
+# 為什麼要獨立這支：夜盤（盤後交易）15:00 到隔天 05:00 才收盤，daily.yml 完整分析排在收盤後
+# 那幾次（14:03~16:33）跑的時候，當晚的夜盤才剛開盤或還在跑，抓到的是還沒結束的盤中價格；
+# 改成隔天早上 8 點（留了緩衝時間）單獨抓一次，這時候夜盤已經收盤，才是「跑完整晚」的最終結果。
+#
+# 做法：把目前已發布的網頁檔案抓下來（避免蓋掉），只更新 market.json 的 night 欄位，再重新發布。
+# 網頁會在載入時額外讀一次 market.json（見 template.html 的 loadMarket()），所以這裡更新的夜盤
+# 就算晚於 daily.yml 那幾次產生網頁的時間，使用者還是看得到最新的。
+name: night-futures
+
+on:
+  schedule:
+    - cron: "3 0 * * 1-5"   # 台灣時間約 08:03（週一到週五；週五晚上到週六的夜盤，週一這次會抓到）
+  workflow_dispatch:
+
+concurrency:
+  group: pages   # 跟 daily.yml、intraday-quotes.yml 共用同一個群組，避免同時發布互相蓋掉
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install requests   # 最輕量安裝，不需要 pandas/yfinance
+      - name: 取回目前已發布的網頁檔案（避免這次發布把它們蓋掉）
+        run: |
+          mkdir -p site
+          for f in index.html history.json candidates_daily.csv candidates_weekly.csv market.json universe.json quotes.json terms.html privacy.html; do
+            curl -fsSL "https://yudi333.github.io/stock-watchlist/$f?t=$(date +%s)" -o "site/$f" \
+              || echo "略過 $f（可能還沒發布過，正常現象）"
+          done
+      - run: python night_futures.py site/market.json
+        continue-on-error: true   # 抓不到夜盤也要保留剛剛取回的舊網頁內容，不能讓網頁消失
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -10,6 +10,7 @@
 
 import html
 import json
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,21 @@ import history
 BASE_DIR = Path(__file__).parent
 SITE_DIR = BASE_DIR / "site"
 TEMPLATE = BASE_DIR / "template.html"
+SITE_URL = "https://yudi333.github.io/stock-watchlist"
+
+
+def fetch_live_night():
+    """讀「目前已發布網頁」的 market.json，只要 night（夜盤）那一欄——這樣重新產生網頁時
+    才不會蓋掉 night_futures.py 每天早上另外更新的夜盤資料（這裡的 screener.py 不算夜盤，
+    見 screener.py market_status() 的說明）。讀不到（還沒發布過、網路問題）就回傳 None，
+    不影響網頁其他任何部分。"""
+    try:
+        req = urllib.request.Request(f"{SITE_URL}/market.json?t={int(datetime.now().timestamp())}",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode("utf-8")).get("night")
+    except Exception:
+        return None
 
 
 def links(code, symbol):
@@ -140,6 +156,11 @@ def main():
     market_html = ""
     try:
         m = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))
+        live_night = fetch_live_night()          # 延續 night_futures.py 每天早上更新的夜盤，不被這次蓋掉
+        if live_night:
+            m["night"] = live_night
+        (SITE_DIR / "market.json").write_text(
+            json.dumps(m, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         rows = [f'<div><b>日期</b>：{m["date"]}</div>',
                 f'<div><b>大盤</b>：加權 {m["close"]:,.0f}（月線 {m["ma20"]:,.0f}／季線 {m["ma60"]:,.0f}）'
                 f'{html.escape(m["text"])}</div>']
@@ -155,8 +176,11 @@ def main():
             arrow, cls = ("▲", "up") if d["chg_pct"] > 0 else (("▼", "down") if d["chg_pct"] < 0 else ("－", ""))
             rows.append(f'<div><b>夜盤</b>：{d["month"]}台指期 {d["close"]:,.0f}　'
                         f'<span class="{cls}">{arrow} {abs(d["chg_pct"])}%</span>　'
-                        f'<small style="color:var(--muted)">（最新一筆：{d["date"]}，跟大盤一起在每次網頁更新時刷新）</small></div>')
-        market_html = f'<div class="market">{"".join(rows)}</div>'
+                        f'<small style="color:var(--muted)">（{d["date"]} 夜盤，官方資料沒有查詢特定日期的功能，'
+                        f'只給目前最新一筆，可能不是最新一個交易日）</small></div>')
+        # id="market"：讓網頁載入後，client 端 JS 再讀一次 market.json 覆蓋這裡的內容，
+        # 這樣才會抓到 night_futures.py 在網頁「這次產生之後」才更新的夜盤（見 template.html 的 loadMarket()）
+        market_html = f'<div class="market" id="market">{"".join(rows)}</div>'
     except Exception:
         pass                                    # 沒有大盤資料就不顯示這一塊
 

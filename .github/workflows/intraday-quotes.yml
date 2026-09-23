@@ -34,7 +34,7 @@ jobs:
       - name: 取回目前已發布的網頁檔案（避免這次發布把它們蓋掉）
         run: |
           mkdir -p site
-          for f in index.html history.json candidates_daily.csv candidates_weekly.csv market.json universe.json quotes.json; do
+          for f in index.html history.json candidates_daily.csv candidates_weekly.csv market.json universe.json quotes.json terms.html privacy.html; do
             curl -fsSL "https://yudi333.github.io/stock-watchlist/$f?t=$(date +%s)" -o "site/$f" \
               || echo "略過 $f（可能還沒發布過，正常現象）"
           done

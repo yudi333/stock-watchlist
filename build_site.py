@@ -10,6 +10,7 @@
 
 import html
 import json
+import math
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,8 +68,54 @@ POS_CLASS = {"現價在買進區間內": "in", "現價高於區間，勿追，�
 POS_SHORT = {"in": "區間內", "above": "高於區間", "below": "低於區間"}
 
 
-def picks_table(csv_name):
-    """讀 candidates_*.csv，回傳表格 HTML。沒有檔案或沒有候選時顯示說明。"""
+def tick_size(price):
+    """台股升降單位：股價級距不同，一檔跳動的價格不同，漲跌停價要照這個無條件捨去/進位。"""
+    if price < 10:
+        return 0.01
+    if price < 50:
+        return 0.05
+    if price < 100:
+        return 0.1
+    if price < 500:
+        return 0.5
+    if price < 1000:
+        return 1
+    return 5
+
+
+def limit_up(prev):
+    raw = prev * 1.1
+    t = tick_size(raw)
+    return math.floor((raw / t) + 1e-9) * t   # +eps 避免浮點數邊界誤差
+
+
+def limit_down(prev):
+    raw = prev * 0.9
+    t = tick_size(raw)
+    return math.ceil((raw / t) - 1e-9) * t
+
+
+def price_class(code, by_code):
+    """收盤價的漲跌停標記（跟 template.html 的 priceCellClass() 同一套邏輯）：收在漲跌停＝
+    底色填滿；只有影線碰到但收盤沒守住＝文字上色。找不到資料（例如剛好資料延遲）就不標記。"""
+    s = by_code.get(str(code))
+    if not s or s.get("prev") is None:
+        return ""
+    close, up, down = s["close"], limit_up(s["prev"]), limit_down(s["prev"])
+    if abs(close - up) < 0.01:
+        return "fill-up"
+    if abs(close - down) < 0.01:
+        return "fill-down"
+    if s.get("high") is not None and abs(s["high"] - up) < 0.01:
+        return "up"
+    if s.get("low") is not None and abs(s["low"] - down) < 0.01:
+        return "down"
+    return ""
+
+
+def picks_table(csv_name, by_code):
+    """讀 candidates_*.csv，回傳表格 HTML。沒有檔案或沒有候選時顯示說明。
+    by_code：{代號: stocks.json 裡的那筆記錄}，用來畫收盤價的漲跌停標記。"""
     path = BASE_DIR / csv_name
     if not path.exists():
         return '<div class="tablewrap"><div class="empty">尚無資料</div></div>'
@@ -82,8 +129,9 @@ def picks_table(csv_name):
         f"<button class='btn sm' style='margin-top:4px' data-add='{r['代號']}'>＋觀察</button></td>"
         f"<td class='l'>{html.escape(str(r['型態']))}"
         + (' <span class="tag t-hot">左側</span>' if r.get("側別") == "左側" else "") + "</td>"
+        f"<td><span class='{price_class(r['代號'], by_code)}'>{r['收盤']:,.2f}</span></td>"
         f"<td>{r['買進下限']:,.2f}～{r['買進上限']:,.2f}<br>"
-        f"<small class='pos-{POS_CLASS.get(r['現價位置'], '')}'>收 {r['收盤']:,.2f}．{r['現價位置']}</small></td>"
+        f"<small class='pos-{POS_CLASS.get(r['現價位置'], '')}'>{r['現價位置']}</small></td>"
         f"<td class='stopc'>{r['停損價']:,.2f}<br><small>-{r['風險%']}%</small></td>"
         f"<td class='tpc'>{r['停利價']:,.2f}<br><small>+{r['報酬%']}%</small></td>"
         f"<td>{r.get('賺賠比', '')}</td>"
@@ -91,7 +139,7 @@ def picks_table(csv_name):
         for _, r in d.iterrows()
     )
     return ('<div class="tablewrap"><table class="picks"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
-            '<th class="l">訊號</th><th>買進區間</th><th>停損價</th><th>停利價</th><th>賺賠比</th>'
+            '<th class="l">訊號</th><th>收盤</th><th>買進區間</th><th>停損價</th><th>停利價</th><th>賺賠比</th>'
             '<th class="l">理由</th></tr></thead>'
             f"<tbody>{rows}</tbody></table></div>")
 
@@ -228,14 +276,15 @@ def main():
                         f'這些股票的數字請晚點再看。</div>')
 
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
+    by_code = {s["code"]: s for s in stocks["stocks"]}   # 給候選股表格畫收盤價的漲跌停標記用
     # JSON 放進 <script> 前，把 "</" 換掉避免提早結束標籤
     data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     page = (TEMPLATE.read_text(encoding="utf-8")
             .replace("__DATA_DATE__", stocks["date"]).replace("__NOW__", now)
             .replace("__MARKET__", market_html)
             .replace("__MULTI__", multi_signal_html(stocks["stocks"]))
-            .replace("__DAILY__", picks_table("candidates_daily.csv"))
-            .replace("__WEEKLY__", picks_table("candidates_weekly.csv"))
+            .replace("__DAILY__", picks_table("candidates_daily.csv", by_code))
+            .replace("__WEEKLY__", picks_table("candidates_weekly.csv", by_code))
             .replace("__DATA__", data_json))
     (SITE_DIR / "index.html").write_text(page, encoding="utf-8")
     print(f"已產生 {SITE_DIR.name}/index.html（{len(stocks['stocks'])} 檔可搜尋；已記錄 {len(hist_file['days'])} 天）")

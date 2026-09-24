@@ -27,14 +27,15 @@ table.picks td{white-space:normal}
 table.picks td.reason{min-width:200px}
 table.picks td:nth-child(2){min-width:104px}
 table.picks td:nth-child(3){min-width:118px}
-table.picks td:nth-child(4){min-width:140px}
+table.picks td:nth-child(4){min-width:70px}
+table.picks td:nth-child(5){min-width:140px}
 .btn,.links{white-space:nowrap}
 .reason{white-space:normal;text-align:left;min-width:260px;color:var(--muted);font-size:13px}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin:1px 4px 1px 0;border:1px solid currentColor}
 .t-bull{color:var(--good)}.t-weak{color:var(--bad)}.t-hot{color:var(--warn)}.t-mute{color:var(--muted)}
 .up{color:var(--good)}.down{color:var(--bad)}
-.fill-up{background:var(--good);color:#fff;font-weight:600;border-radius:4px;padding:2px 6px}
-.fill-down{background:var(--bad);color:#fff;font-weight:600;border-radius:4px;padding:2px 6px}
+.fill-up{background:var(--good);color:#fff;font-weight:600;border-radius:4px;padding:1px 4px}
+.fill-down{background:var(--bad);color:#fff;font-weight:600;border-radius:4px;padding:1px 4px}
 .stopc{color:var(--bad)}.tpc{color:var(--good)}
 .links a{font-size:12px;margin-right:8px;color:var(--muted);text-decoration:none;border-bottom:1px dotted}
 .links a:hover{color:var(--text)}
@@ -717,7 +718,7 @@ __WEEKLY__
             el('span', { class: 'caret' }, isOpen ? '▾' : '▸'), s.name, codeM);
           const pts = s.prev != null ? s.close - s.prev : null;
           tr.append(el('td', { class: 'l hm' }, s.code), el('td', { class: 'l' }, nameCell),
-            el('td', { class: priceCellClass(s) }, num(s.close)),
+            el('td', {}, el('span', { class: priceCellClass(s) }, num(s.close))),
             el('td', { class: dir(s.chg) }, pts != null ? signedNum(pts) : '—', el('br'), el('small', {}, signed(s.chg))),
             el('td', { class: 'hm' }, String(s.rsi)),
             el('td', { class: 'l' }, tagsOf(s)), el('td', { class: 'l hm' }, links(s)));

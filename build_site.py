@@ -24,6 +24,20 @@ TEMPLATE = BASE_DIR / "template.html"
 SITE_URL = "https://yudi333.github.io/stock-watchlist"
 
 
+def fetch_live_file(path):
+    """讀「目前已發布網頁」的某個檔案原始內容，讀不到就回傳 None。用來保留只有另外的
+    workflow（intraday-quotes.yml）才會更新、這裡不會重新產生的檔案——不然 daily.yml
+    每次重新發布整個 site/ 目錄時，會把這些檔案整個蓋掉／刪掉，直到下次 intraday 執行
+    才會補回來，中間這段時間網頁會抓不到（例如「我的持股」的盤中報價）。"""
+    try:
+        req = urllib.request.Request(f"{SITE_URL}/{path}?t={int(datetime.now().timestamp())}",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.read().decode("utf-8")
+    except Exception:
+        return None
+
+
 def fetch_live_night():
     """讀「目前已發布網頁」的 market.json，只要 night（夜盤）那一欄——這樣重新產生網頁時
     才不會蓋掉 night_futures.py 每天早上另外更新的夜盤資料（這裡的 screener.py 不算夜盤，
@@ -152,6 +166,14 @@ def main():
         src = BASE_DIR / name
         if src.exists():
             (SITE_DIR / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # 盤中報價（quotes.json）只有 intraday-quotes.yml 會更新，這裡（daily.yml）不會重算；
+    # 沒有這一段的話，daily.yml 每次發布都會把它整個蓋掉，要等到下一次 intraday 執行
+    # （最快 30 分鐘後，若已過盤中時段就要等到隔天開盤）才會補回來，這段時間「我的持股」
+    # 會抓不到盤中報價。讀不到（還沒發布過、網路問題）就跳過，不影響網頁其他部分。
+    live_quotes = fetch_live_file("quotes.json")
+    if live_quotes:
+        (SITE_DIR / "quotes.json").write_text(live_quotes, encoding="utf-8")
 
     market_html = ""
     try:

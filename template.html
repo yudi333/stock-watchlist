@@ -297,23 +297,26 @@ __WEEKLY__
   // 抓不到就維持網頁產生時的內容，不用提示。
   function renderMarketBox(m) {
     const box = $('market'); if (!box || !m) return;
-    const badge = (pct) => {   // 統一的漲跌 %：紅色▲／綠色▼，跟觀察清單、持股的顏色邏輯一致
+    const badge = (pts, pct) => {   // 統一的漲跌樣式：點數＋%，紅色▲／綠色▼，跟觀察清單、持股的顏色邏輯一致
       const [arrow, cls] = pct > 0 ? ['▲', 'up'] : pct < 0 ? ['▼', 'down'] : ['－', ''];
-      return el('span', { class: cls }, `${arrow} ${Math.abs(pct)}%`);
+      const ptsTxt = pts != null ? num(Math.abs(pts)) + '　' : '';
+      return el('span', { class: cls }, `${arrow} ${ptsTxt}${Math.abs(pct).toFixed(2)}%`);
     };
     const rows = [
       el('div', {}, el('b', {}, '日期'), '：' + m.date),
-      el('div', {}, el('b', {}, '大盤'), `：加權 ${num(m.close, 0)}　`,
-        m.chg_pct != null ? badge(m.chg_pct) : null,
-        `（月線 ${num(m.ma20, 0)}／季線 ${num(m.ma60, 0)}）${m.text}`),
+      el('div', {}, el('b', {}, '大盤'), `：加權 ${num(m.close)}　`,
+        m.chg_pct != null ? badge(m.chg_pts, m.chg_pct) : null,
+        `（月線 ${num(m.ma20)}／季線 ${num(m.ma60)}）${m.text}`),
     ];
     try {   // 個別欄位格式不對（例如剛好卡到改版前後）就跳過那一行，不影響日期/大盤這兩行
-      if (m.otc) rows.push(el('div', {}, el('b', {}, '櫃買'), `：${num(m.otc.close)}　`, badge(m.otc.chg_pct)));
+      if (m.otc) rows.push(el('div', {}, el('b', {}, '櫃買'), `：${num(m.otc.close)}　`, badge(m.otc.chg_pts, m.otc.chg_pct)));
     } catch (e) {}
     try {
-      if (m.night && m.night.label) rows.push(el('div', {}, el('b', {}, '夜盤'), `：${m.night.label} ${num(m.night.close, 0)}　`,
-        badge(m.night.chg_pct), '　',
-        el('small', { style: 'color:var(--muted)' }, `（${m.night.date} 收盤）`)));
+      if (m.night && m.night.label) {
+        const b = 'chg_pct' in m.night ? [badge(m.night.chg_pts, m.night.chg_pct), '　'] : [];
+        rows.push(el('div', {}, el('b', {}, '夜盤'), `：${m.night.label} ${num(m.night.close)}　`, ...b,
+          el('small', { style: 'color:var(--muted)' }, `（${m.night.date} 收盤）`)));
+      }
     } catch (e) {}
     box.replaceChildren(...rows);
   }

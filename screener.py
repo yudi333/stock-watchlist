@@ -240,7 +240,8 @@ def fetch_otc_index():
         close, prev = fi["lastPrice"], fi["previousClose"]
         if not (close and prev):
             return None
-        return {"close": round(float(close), 2), "chg_pct": round((close / prev - 1) * 100, 2)}
+        return {"close": round(float(close), 2), "chg_pts": round(float(close - prev), 2),
+                "chg_pct": round((close / prev - 1) * 100, 2)}
     except Exception as e:
         print(f"[注意] 抓不到櫃買指數：{e}")
         return None
@@ -279,8 +280,9 @@ def market_status():
         else:
             text = "偏弱：加權指數跌破季線，個股上漲機會較小，買進請更保守"
         date = c.index[-1].strftime("%Y-%m-%d")
+        chg_pts = round(float(c.iloc[-1] - c.iloc[-2]), 2) if len(c) >= 2 else None
         chg_pct = round((c.iloc[-1] / c.iloc[-2] - 1) * 100, 2) if len(c) >= 2 else None
-        info = {"date": date, "close": round(float(c.iloc[-1]), 2), "chg_pct": chg_pct,
+        info = {"date": date, "close": round(float(c.iloc[-1]), 2), "chg_pts": chg_pts, "chg_pct": chg_pct,
                 "ma20": round(float(ma20), 2), "ma60": round(float(ma60), 2), "text": text}
         otc = fetch_otc_index()
         if otc:

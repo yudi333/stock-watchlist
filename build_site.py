@@ -187,26 +187,28 @@ def main():
         (SITE_DIR / "market.json").write_text(
             json.dumps(m, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
-        def pct_badge(pct):   # 統一的漲跌 %：紅色▲／綠色▼，跟觀察清單、持股的顏色邏輯一致
+        def pct_badge(pts, pct):   # 統一的漲跌樣式：點數＋%，紅色▲／綠色▼，跟觀察清單、持股的顏色邏輯一致
             arrow, cls = ("▲", "up") if pct > 0 else (("▼", "down") if pct < 0 else ("－", ""))
-            return f'<span class="{cls}">{arrow} {abs(pct)}%</span>'
+            pts_txt = f"{abs(pts):,.2f}　" if pts is not None else ""
+            return f'<span class="{cls}">{arrow} {pts_txt}{abs(pct):.2f}%</span>'
 
         rows = [f'<div><b>日期</b>：{m["date"]}</div>',
-                f'<div><b>大盤</b>：加權 {m["close"]:,.0f}'
-                + (f'　{pct_badge(m["chg_pct"])}' if m.get("chg_pct") is not None else '')
-                + f'（月線 {m["ma20"]:,.0f}／季線 {m["ma60"]:,.0f}）{html.escape(m["text"])}</div>']
+                f'<div><b>大盤</b>：加權 {m["close"]:,.2f}'
+                + (f'　{pct_badge(m.get("chg_pts"), m["chg_pct"])}' if m.get("chg_pct") is not None else '')
+                + f'（月線 {m["ma20"]:,.2f}／季線 {m["ma60"]:,.2f}）{html.escape(m["text"])}</div>']
         # 櫃買、夜盤都是「現價快照」，Yahoo 沒提供完整歷史資料，只能顯示現價漲跌，不像大盤（加權指數）
         # 能算月線/季線判斷多空；個別欄位格式不對就跳過那一行，不影響日期/大盤這兩行一定會顯示
         try:
             if "otc" in m:
                 d = m["otc"]
-                rows.append(f'<div><b>櫃買</b>：{d["close"]:,.2f}　{pct_badge(d["chg_pct"])}</div>')
+                rows.append(f'<div><b>櫃買</b>：{d["close"]:,.2f}　{pct_badge(d.get("chg_pts"), d["chg_pct"])}</div>')
         except Exception:
             pass
         try:
             if "night" in m:
                 d = m["night"]
-                rows.append(f'<div><b>夜盤</b>：{d["label"]} {d["close"]:,.0f}　{pct_badge(d["chg_pct"])}　'
+                badge = pct_badge(d["chg_pts"], d["chg_pct"]) + "　" if "chg_pct" in d else ""
+                rows.append(f'<div><b>夜盤</b>：{d["label"]} {d["close"]:,.2f}　{badge}'
                             f'<small style="color:var(--muted)">（{d["date"]} 收盤）</small></div>')
         except Exception:
             pass

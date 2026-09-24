@@ -9,11 +9,19 @@ night 欄位，其他欄位（大盤、櫃買，由 screener.py 算好）維持�
 
 資料來源：Yahoo奇摩股市「台指期近一（WTX&）」頁面——這是日盤＋夜盤合一的連續合約（不是
 分開的兩個商品），頁面內嵌一段可以直接解析的 JSON，用簡單的 HTTP GET 就能拿到，不需要像
-wantgoo 那樣處理 WebSocket 即時推播（試過，那個沒辦法用簡單的排程腳本抓）。05:00 收盤到
-隔天 09:00 開盤這段沒有新成交，數字會停在夜盤最後一筆，這也是為什麼要在這段時間抓。
+wantgoo 那樣處理 WebSocket 即時推播（試過，那個沒辦法用簡單的排程腳本抓）。
 
-跟其他看盤網站（例如 wantgoo）的數字可能會有幾十到幾百點的小差異，是不同資料商本來就會有的
-正常現象，不是抓錯。
+用的是 regularMarketPreviousClose（上一個完整交易日的收盤），不是即時跳動的 price——
+price 只有在 05:00~09:00 這個沒有新成交的空檔抓才準，一旦排程延遲、晚一點才跑（GitHub
+Actions 排程本來就可能延遲），price 就已經是新的一天、還在跳動的價格了；
+regularMarketPreviousClose 不管什麼時間抓都是同一個穩定數字，比較可靠。
+日期就是這個收盤所屬的交易日（抓取時的前一個交易日，遇到週末會自動往前跳過）。
+
+漲跌（點數／%）：Yahoo 這個頁面沒有直接給「這個收盤價自己的漲跌」，所以用滾動比較的方式
+自己算——上次執行時存的收盤價，就是「再前一個交易日」的收盤，兩者一減就是這次收盤的漲跌。
+第一次套用這個版本、或中間漏跑了一天，會抓不到基準，那天不顯示漲跌，隔天開始就正常。
+
+跟其他看盤網站（例如 wantgoo）的數字可能會有小差異，是不同資料商本來就會有的正常現象。
 
 用法：python night_futures.py [market.json 路徑，預設 market.json]
 """
@@ -59,6 +67,14 @@ def _extract_json_object(text, key):
     return None
 
 
+def _prev_trading_day(now):
+    """回傳「上一個交易日」的日期字串（跳過週六日）。"""
+    d = now - timedelta(days=1)
+    while d.weekday() >= 5:      # 5=週六, 6=週日
+        d -= timedelta(days=1)
+    return d.strftime("%Y-%m-%d")
+
+
 def fetch_night_futures():
     """抓不到、或欄位對不起來就回傳 None。"""
     try:
@@ -68,11 +84,9 @@ def fetch_night_futures():
         if not fundamental:
             return None
         q = fundamental["quote"]["data"]
-        close = float(q["price"]["raw"])
-        chg_pct = float(q["changePercent"].rstrip("%"))
-        ts = datetime.fromisoformat(q["regularMarketTime"].replace("Z", "+00:00"))
-        ts = ts.astimezone(timezone(timedelta(hours=8)))
-        return {"date": ts.strftime("%Y-%m-%d"), "label": "台指期盤後一", "close": close, "chg_pct": chg_pct}
+        close = float(q["regularMarketPreviousClose"]["raw"])
+        date = _prev_trading_day(datetime.now(timezone(timedelta(hours=8))))
+        return {"date": date, "label": "台指期盤後一", "close": round(close, 2)}
     except Exception as e:
         print(f"[注意] 抓不到台指期夜盤：{e}")
         return None
@@ -89,6 +103,17 @@ def main():
     if not night:
         print("抓不到夜盤資料，market.json 維持原樣不動")
         return 0
+
+    prev = market.get("night") or {}
+    if prev.get("close") is not None and prev.get("date") != night["date"]:
+        # 用「上次記錄的收盤」當基準，算出這次收盤自己的漲跌（等於跟前一個交易日比）
+        night["chg_pts"] = round(night["close"] - prev["close"], 2)
+        night["chg_pct"] = round((night["close"] / prev["close"] - 1) * 100, 2)
+    elif prev.get("date") == night["date"] and "chg_pts" in prev:
+        # 同一天重複執行（例如手動重跑測試），沿用已經算好的漲跌，避免自己跟自己比變成 0
+        night["chg_pts"] = prev["chg_pts"]
+        night["chg_pct"] = prev["chg_pct"]
+
     if market.get("night") == night:
         print(f"夜盤資料跟現有的一樣（{night['date']}），不用更新")
         return 0
@@ -96,7 +121,8 @@ def main():
     market["night"] = night
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(market, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"已更新夜盤：{night['label']} {night['close']:,.0f}（{night['chg_pct']:+.2f}%），資料日期 {night['date']}")
+    chg_txt = f"（{night['chg_pts']:+.2f}／{night['chg_pct']:+.2f}%）" if "chg_pct" in night else "（尚無比較基準）"
+    print(f"已更新夜盤：{night['label']} {night['close']:,.2f}{chg_txt}，資料日期 {night['date']}")
     return 0
 
 

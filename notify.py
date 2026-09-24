@@ -19,7 +19,6 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 MESSAGE_FILE = BASE_DIR / "message.txt"
-SITE_URL = "https://yudi333.github.io/stock-watchlist/"
 
 
 def read_csv(name):
@@ -89,7 +88,7 @@ def make_message():
     lines.append(f"每日候選：{len(daily)} 檔")
     lines += [stock_line(r["代號"], r["名稱"]) for r in daily] or ["（無）"]
 
-    lines += ["", f"網頁：{SITE_URL}", "僅為資料分析，不是投資建議；自負盈虧"]
+    lines += ["", "僅為資料分析，不是投資建議；自負盈虧"]
     return "\n".join(lines)
 
 

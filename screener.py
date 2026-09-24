@@ -10,8 +10,10 @@
 """
 
 import json
+import math
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -410,6 +412,59 @@ def analyze_stock(item, df, inst_notes=None):
     return rec, rd, rw, date
 
 
+def repair_missing_close(data, part):
+    """Yahoo 批次下載偶爾會漏掉「最後一天」的收盤價（開高低量都正常，唯獨收盤是空的，
+    之後也不一定會補），但那個時間點 Yahoo 網頁上其實已經有正確的收盤價，藏在
+    fast_info 的 lastPrice（跟批次下載走不同的 API）。缺漏才補查，多執行緒加速，
+    不影響平常（沒缺漏）的速度；查不到就維持缺漏，照原本邏輯退回用前一天的資料。"""
+    missing = [s for s in part if not data[s["sym"]].empty and pd.isna(data[s["sym"]]["Close"].iloc[-1])]
+    if not missing:
+        return
+    def fetch_one(s):
+        try:
+            return s["sym"], yf.Ticker(s["sym"]).fast_info["lastPrice"]
+        except Exception:
+            return s["sym"], None
+    fixed = 0
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for sym, price in ex.map(fetch_one, missing):
+            if price is not None and not pd.isna(price):
+                # data[sym] 是分組後的切片，改它不會寫回原本的 data（pandas 的 copy-on-write）；
+                # 要用完整的 MultiIndex 欄位鍵直接改 data 本身才會真的生效
+                last = data.index[-1]
+                data.loc[last, (sym, "Close")] = price
+                # 交易很冷清、當天完全沒成交的股票，連開高低量都是空的（不是只缺收盤）；
+                # 高低價沒有真實數字可用，就用補回的收盤價當高低價（等於「一天沒有波動」），
+                # 成交量補 0，這樣後面算漲跌停/量比才不會因為 NaN 而整檔壞掉
+                row = data.loc[last, sym]
+                if pd.isna(row.get("High")):
+                    data.loc[last, (sym, "High")] = price
+                if pd.isna(row.get("Low")):
+                    data.loc[last, (sym, "Low")] = price
+                if pd.isna(row.get("Open")):
+                    data.loc[last, (sym, "Open")] = price
+                if pd.isna(row.get("Volume")):
+                    data.loc[last, (sym, "Volume")] = 0
+                fixed += 1
+    print(f"  [注意] {len(missing)} 檔這批收盤價缺漏，用即時價補回 {fixed} 檔"
+          + ("" if fixed == len(missing) else f"，{len(missing) - fixed} 檔查不到只好維持缺漏"))
+
+
+def sanitize(obj):
+    """Python 的 json.dumps 預設會把 NaN/Infinity 這種數字寫成 JSON 沒有的 NaN/Infinity
+    字面值，瀏覽器的 JSON.parse 遇到就直接整份報錯、後面的資料全部讀不到（單一一檔壞資料
+    就讓全站掛掉）。理論上前面 repair_missing_close() 已經補掉已知會缺漏的欄位，這裡是
+    保險：把漏網的 NaN/Infinity 都換成 null，最壞情況也只是那一檔某個欄位缺著，不會拖累
+    其他 1900 多檔。"""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize(v) for v in obj]
+    return obj
+
+
 def main():
     try:
         watchlist, _, _, _ = load_config()
@@ -443,6 +498,7 @@ def main():
             print(f"[注意] 第 {i // CHUNK + 1} 批下載失敗：{e}")
             failed += len(part)
             continue
+        repair_missing_close(data, part)
         for item in part:
             try:
                 out = analyze_stock(item, data[item["sym"]], inst_notes)
@@ -471,7 +527,7 @@ def main():
         print(f"[注意] {stale} 檔資料比整體日期（{data_date}）舊，已加註標籤")
 
     (BASE_DIR / "stocks.json").write_text(
-        json.dumps({"date": data_date, "stocks": records}, ensure_ascii=False, separators=(",", ":")),
+        json.dumps(sanitize({"date": data_date, "stocks": records}), ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8")
     print(f"\n已存 stocks.json：{len(records)} 檔可搜尋")
 

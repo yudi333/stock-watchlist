@@ -42,6 +42,15 @@ jobs:
       - run: python screener.py
         continue-on-error: true   # 選股失敗也要讓網頁照常更新（搜尋會顯示提示）
       - run: python build_site.py
+      - run: python notify.py make   # 產生 Telegram 通知的摘要文字（message.txt），給最後的 notify job 用
+        if: always()
+        continue-on-error: true      # 產生摘要失敗不該讓網頁發布跟著失敗
+      - uses: actions/upload-artifact@v4   # 存成 artifact 讓 notify job（別的 runner）讀得到
+        if: always()
+        with:
+          name: notify-message
+          path: message.txt
+          retention-days: 1
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
@@ -55,3 +64,24 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  notify:
+    needs: [build, deploy]
+    if: always()   # build 或 deploy 失敗也要通知，不然你只會看到網頁沒更新、不知道為什麼
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - uses: actions/download-artifact@v4
+        continue-on-error: true   # build 太早失敗、根本沒產生 message.txt 也沒關係
+        with:
+          name: notify-message
+      - name: 傳送 Telegram 通知
+        run: python notify.py send "${{ needs.build.result }}" "${{ needs.deploy.result }}"
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

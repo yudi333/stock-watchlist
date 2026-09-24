@@ -295,9 +295,27 @@ Firestore 用即時監聽（`onSnapshot`），另一台裝置改了，這台**�
 
 本機預覽：`python screener.py && python build_site.py`，再用瀏覽器開啟 `site/index.html`。
 
-## Telegram 更新通知（尚未啟用）
+## Telegram 更新通知
 
-[notify.py](notify.py) 已備好（更新後傳摘要到 Telegram，失敗時也會通知），但**目前沒有接進自動更新流程**。
-之後要啟用時：先向 @BotFather 建立機器人，把 token 與 chat id 存成 GitHub 的
-`TG_BOT_TOKEN`、`TG_CHAT_ID` secret，再把通知步驟加回 `.github/workflows/daily.yml`。
-token 等同密碼，不要寫進程式或貼給別人。
+[notify.py](notify.py) 已經接進 `daily.yml`（只有這個 workflow 會通知，`intraday-quotes`／
+`night-futures` 頻率太高、內容也只是價格數字，不會通知）：每次收盤後完整分析跑完，會把當天的
+每日候選、每週候選、多重訊號摘要傳到 Telegram；分析或發布失敗時也會另外傳一則失敗警告
+（附上 GitHub Actions 那次執行的連結，方便直接點進去看記錄）。
+
+### 設定步驟
+
+1. 到 Telegram 找 **@BotFather**，傳 `/newbot`，照指示取名字，完成後會拿到一組 **token**
+2. 跟你剛建立的機器人隨便傳一句話（不然它抓不到你的 chat id），然後打開瀏覽器輸入：
+   ```
+   https://api.telegram.org/bot<你的token>/getUpdates
+   ```
+   回傳的 JSON 裡找 `"chat":{"id":數字,...}`，那組數字就是 **chat id**
+3. 到 GitHub 這個 repo 的 **Settings → Secrets and variables → Actions → New repository secret**，
+   新增兩個：
+   - `TG_BOT_TOKEN`：剛剛 BotFather 給的 token
+   - `TG_CHAT_ID`：剛剛查到的 chat id
+4. 存好之後，下次 `daily-update` 執行完就會收到通知；沒設定這兩個 secret 也完全不影響
+   網站本身，只是不會有通知（`notify.py` 會自己偵測、跳過，不會讓更新失敗）
+
+token 等同密碼，不要寫進程式碼、不要貼給別人；只放在 GitHub 的 Secrets 裡（那邊看不到明文，
+連你自己之後也看不到，只能重新產生新的）。

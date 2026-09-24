@@ -1,8 +1,13 @@
-# 週一到週五台灣時間約 15:07、16:10、18:03，跑完整的技術分析並更新網頁。
+# 週一到週五台灣時間約 15:07、16:10、18:00，跑完整的技術分析並更新網頁。
+#
+# 排程不是用 GitHub 自己的 schedule（官方說明常常會延遲或整個被跳過，實測也真的不準時），
+# 改用外部的 cron-job.org 這個服務，時間到了直接呼叫這支 workflow 的
+# workflow_dispatch API（repos/.../actions/workflows/daily.yml/dispatches）觸發，
+# 準時很多。要改時間到 cron-job.org 網站上改那三個工作，這個檔案本身不用動。
 #
 # 完整分析只排在收盤後：股市 13:30 收盤，盤中日線資料的收盤價是空的，會被
 # stock_checker.py 的 drop_unfinished_today() 濾掉、改用前一天收盤，重算均線/RSI/
-# 訊號等於白跑。15:07 是留了緩衝時間的正式版本。16:10、18:03 是後續兩道保險：
+# 訊號等於白跑。15:07 是留了緩衝時間的正式版本。16:10、18:00 是後續兩道保險：
 # 遇到 Yahoo／證交所資料延遲比較久的日子（會在頁面上方看到橘色提醒），這幾次
 # 通常就會補上；三次都失敗也不會出錯，只是網頁會維持上一次的內容，並標示哪些
 # 股票資料延遲。
@@ -11,13 +16,7 @@
 name: daily-update
 
 on:
-  schedule:
-    # 刻意避開整點：GitHub 官方說明整點是排程最容易被延遲或跳過的時段，
-    # 偏移幾分鐘可以大幅降低這個機率。
-    - cron: "7 7 * * 1-5"    # 約 15:07（正式版本）
-    - cron: "10 8 * * 1-5"   # 約 16:10（第二道保險）
-    - cron: "3 10 * * 1-5"   # 約 18:03（第三道保險，補資料延遲的日子）
-  workflow_dispatch:   # 也可以在 GitHub 網頁上手動按「Run workflow」
+  workflow_dispatch:   # cron-job.org 定時呼叫這個；也可以自己到 GitHub 網頁上手動按「Run workflow」
 
 concurrency:
   group: pages   # 跟 intraday-quotes.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
@@ -74,7 +73,7 @@ jobs:
         id: today
         run: echo "date=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_OUTPUT"
       - name: 檢查今天是否已經通知過
-        # 一天最多發一次：15:07/16:10/18:03 這三次收盤後的更新，只有當天第一次成功執行到
+        # 一天最多發一次：15:07/16:10/18:00 這三次收盤後的更新，只有當天第一次成功執行到
         # 這裡的會真的發送，其餘兩次會跳過（但 build/deploy 一樣照跑、網頁一樣照常更新，
         # 只是不會再發 Telegram）。做法：用當天日期當 cache key，第一次是 cache miss，
         # 送出通知後把 .notified 存進 cache；之後同一天的執行會 cache hit 直接跳過。

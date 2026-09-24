@@ -129,7 +129,7 @@ python build_site.py    # 產生 site/index.html（網頁）
     正常現象（wantgoo 那類網站用 WebSocket 即時推播，沒有簡單的 API 可以排程抓，只能放棄）。
     另外用獨立的 [night_futures.py](night_futures.py) 每天早上台灣時間約 **08:03**
     （[night-futures.yml](.github/workflows/night-futures.yml)）單獨更新一次——夜盤要到隔天
-    05:00 才收盤，`daily.yml` 收盤後那幾次（15:07~18:03）跑的時候，當晚的夜盤可能才剛開盤或
+    05:00 才收盤，`daily.yml` 收盤後那幾次（15:07~18:00）跑的時候，當晚的夜盤可能才剛開盤或
     還在跑，抓到的是還沒結束的盤中價格；早上 8 點抓的才是「跑完整晚」的最終結果。
     網頁載入時會額外讀一次 `market.json`（見下方「網頁功能」），所以就算 08:03 晚於前一天
     `daily.yml` 產生網頁的時間，使用者還是看得到最新的夜盤。
@@ -250,13 +250,16 @@ Firestore 用即時監聽（`onSnapshot`），另一台裝置改了，這台**�
 
 ## 網頁功能（GitHub Pages）
 
-`.github/workflows/daily.yml` 會在週一到週五**台灣時間約 15:07、16:10、18:03** 各自動執行一次
-`screener.py` 與 `build_site.py`，做完整的技術分析並更新網頁，也可以到 GitHub 的 Actions
-頁面手動按 Run workflow（跟排程執行的內容完全一樣，想跑幾次都可以）。
+`.github/workflows/daily.yml` 會在週一到週五**台灣時間約 15:07、16:10、18:00** 各執行一次
+`screener.py` 與 `build_site.py`，做完整的技術分析並更新網頁。**排程不是用 GitHub 自己的
+schedule**（實測常常延遲或整個被跳過，不夠準時），改用外部的免費服務
+[cron-job.org](https://cron-job.org) 時間到直接呼叫這支 workflow 的 `workflow_dispatch` API
+觸發，準時很多；`daily.yml` 裡只留 `workflow_dispatch`，要改執行時間到 cron-job.org 網站上
+改，不用動這個檔案。當然也可以隨時自己到 GitHub 的 Actions 頁面手動按 Run workflow。
 
 **為什麼完整分析不做盤中更新**：股市 13:30 收盤，盤中 Yahoo 回傳的當天日線資料收盤價是空的，會被
 `stock_checker.py` 的 `drop_unfinished_today()` 濾掉、改用前一天收盤，重算均線／RSI／訊號等於白跑，
-所以三次都排在收盤後：15:07 是留了緩衝時間的正式版本，16:10、**18:03 是後續兩道保險**——遇到
+所以三次都排在收盤後：15:07 是留了緩衝時間的正式版本，16:10、**18:00 是後續兩道保險**——遇到
 Yahoo／證交所那天資料延遲比較久的日子（會在頁面上方看到橘色提醒，見「資料延遲提醒」），這幾次
 通常就會補上；三次都還沒等到新資料也不會出錯，網頁會維持上一次的內容，並繼續標示哪些股票資料
 延遲，之後你自己到 Actions 手動按 Run workflow 重跑即可。**盤中的價格**改用另一支輕量的

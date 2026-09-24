@@ -66,7 +66,7 @@ def make_message():
     lines = [f"日期：{date}"]
     if market:
         m_badge = f"　{badge(market.get('chg_pts'), market['chg_pct'])}" if market.get("chg_pct") is not None else ""
-        lines.append(f"大盤：{market['close']:.2f}{m_badge}　{market['text']}")
+        lines.append(f"大盤：{market['close']:.2f}{m_badge}")
         if "otc" in market:
             o = market["otc"]
             lines.append(f"櫃買：{o['close']:.2f}　{badge(o.get('chg_pts'), o['chg_pct'])}")

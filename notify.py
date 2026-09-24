@@ -30,9 +30,16 @@ def read_csv(name):
         return list(csv.DictReader(f))
 
 
+def badge(pts, pct):
+    """跟網頁上一致的漲跌樣式：▲/▼ + 點數 + %。"""
+    arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "－")
+    pts_txt = f"{abs(pts):.2f}　" if pts is not None else ""
+    return f"{arrow}{pts_txt}{abs(pct):.2f}%"
+
+
 def make_message():
-    """組出摘要文字（純文字，Telegram 上好讀）。只列代號＋名稱，詳細的買進區間/停損/停利
-    要點連結進網頁看；每週候選變化慢，不放進通知裡。"""
+    """組出摘要文字（純文字，Telegram 上好讀）。只列代號＋名稱＋現價漲跌，詳細的買進區間/
+    停損/停利要點連結進網頁看；每週候選變化慢，不放進通知裡。"""
     stocks = None
     try:
         stocks = json.loads((BASE_DIR / "stocks.json").read_text(encoding="utf-8"))
@@ -43,15 +50,27 @@ def make_message():
         market = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))
     except Exception:
         pass
+    by_code = {s["code"]: s for s in stocks["stocks"]} if stocks else {}
+
+    def stock_line(code, name):
+        """代號＋名稱＋收盤＋（跟前一天比）漲跌點數與漲跌幅；stocks.json 只存了漲跌幅（chg），
+        沒有存漲跌點數，用「收盤 ÷ (1+漲跌幅) = 前一天收盤」反推算出點數，四捨五入前的
+        誤差極小，這裡只是通知摘要，不影響網頁上實際的價格與訊號判斷。"""
+        s = by_code.get(code)
+        if not s:
+            return f"・{code} {name}"
+        close, pct = s["close"], s["chg"]
+        prev = close / (1 + pct / 100) if pct != -100 else close
+        return f"・{code} {name}　{close:.2f}　{badge(close - prev, pct)}"
 
     date = (stocks or {}).get("date") or (market or {}).get("date") or "-"
     lines = [f"日期：{date}"]
     if market:
-        lines.append(f"大盤：{market['text']}")
+        m_badge = f"　{badge(market.get('chg_pts'), market['chg_pct'])}" if market.get("chg_pct") is not None else ""
+        lines.append(f"大盤：{market['close']:.2f}{m_badge}　{market['text']}")
         if "otc" in market:
             o = market["otc"]
-            arrow = "▲" if o["chg_pct"] > 0 else ("▼" if o["chg_pct"] < 0 else "－")
-            lines.append(f"櫃買：{o['close']:.2f}　{arrow}{abs(o['chg_pct']):.2f}%")
+            lines.append(f"櫃買：{o['close']:.2f}　{badge(o.get('chg_pts'), o['chg_pct'])}")
     else:
         lines.append("大盤：（資料產生失敗）")
 
@@ -61,14 +80,14 @@ def make_message():
                  if len({g["name"] for g in s["sigs"] if g["side"] == "右側"}) >= 2
                  and "過熱，不追" not in s["tags"]]
         lines.append(f"多重訊號：{len(multi)} 檔")
-        lines += [f"・{s['code']} {s['name']}" for s in multi] or ["（無）"]
+        lines += [stock_line(s["code"], s["name"]) for s in multi] or ["（無）"]
     else:
         lines.append("多重訊號：（資料產生失敗）")
 
     lines.append("")
     daily = read_csv("candidates_daily.csv")
     lines.append(f"每日候選：{len(daily)} 檔")
-    lines += [f"・{r['代號']} {r['名稱']}" for r in daily] or ["（無）"]
+    lines += [stock_line(r["代號"], r["名稱"]) for r in daily] or ["（無）"]
 
     lines += ["", f"網頁：{SITE_URL}", "僅為資料分析，不是投資建議；自負盈虧"]
     return "\n".join(lines)

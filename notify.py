@@ -15,7 +15,6 @@ import csv
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
@@ -32,51 +31,46 @@ def read_csv(name):
 
 
 def make_message():
-    """組出摘要文字（純文字，Telegram 上好讀）。"""
-    lines = []
+    """組出摘要文字（純文字，Telegram 上好讀）。只列代號＋名稱，詳細的買進區間/停損/停利
+    要點連結進網頁看；每週候選變化慢，不放進通知裡。"""
     stocks = None
     try:
         stocks = json.loads((BASE_DIR / "stocks.json").read_text(encoding="utf-8"))
     except Exception:
         pass
-
-    if stocks:
-        date = stocks["date"]
-        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
-        lines.append(f"台股觀察清單已更新（資料日期 {date}）")
-        if date != today:
-            lines.append("※ 資料日期不是今天，可能休市或 Yahoo 還沒更新")
-    else:
-        lines.append("台股觀察清單已更新，但今天的選股資料產生失敗（網頁的搜尋功能可能無資料）")
-
+    market = None
     try:
-        lines.append("大盤：" + json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))["text"])
+        market = json.loads((BASE_DIR / "market.json").read_text(encoding="utf-8"))
     except Exception:
         pass
 
-    daily = read_csv("candidates_daily.csv")
-    lines.append("")
-    lines.append(f"【每日候選】{len(daily)} 檔")
-    for r in daily:
-        left = "（左側）" if r.get("側別") == "左側" else ""
-        lines.append(f"・{r['代號']} {r['名稱']} {r['型態']}{left}\n"
-                     f"  買 {r['買進下限']}～{r['買進上限']}（{r['現價位置']}）\n"
-                     f"  損 {r['停損價']}（-{r['風險%']}%）　利 {r['停利價']}（+{r['報酬%']}%）")
-    if not daily:
-        lines.append("今天沒有符合條件的股票")
+    date = (stocks or {}).get("date") or (market or {}).get("date") or "-"
+    lines = [f"日期：{date}"]
+    if market:
+        lines.append(f"大盤：{market['text']}")
+        if "otc" in market:
+            o = market["otc"]
+            arrow = "▲" if o["chg_pct"] > 0 else ("▼" if o["chg_pct"] < 0 else "－")
+            lines.append(f"櫃買：{o['close']:.2f}　{arrow}{abs(o['chg_pct']):.2f}%")
+    else:
+        lines.append("大盤：（資料產生失敗）")
 
-    weekly = read_csv("candidates_weekly.csv")
     lines.append("")
-    lines.append(f"【每週候選】{len(weekly)} 檔：" + "、".join(f"{r['代號']}{r['名稱']}" for r in weekly))
-
     if stocks:
         multi = [s for s in stocks["stocks"]
                  if len({g["name"] for g in s["sigs"] if g["side"] == "右側"}) >= 2
                  and "過熱，不追" not in s["tags"]]
-        lines.append("")
-        lines.append(f"【多重訊號】{len(multi)} 檔同時符合 2 個以上買進訊號（網頁展開查看）")
+        lines.append(f"多重訊號：{len(multi)} 檔")
+        lines += [f"・{s['code']} {s['name']}" for s in multi] or ["（無）"]
+    else:
+        lines.append("多重訊號：（資料產生失敗）")
 
-    lines += ["", f"網頁：{SITE_URL}", "僅為資料分析，不是投資建議；停損以收盤價跌破為準。"]
+    lines.append("")
+    daily = read_csv("candidates_daily.csv")
+    lines.append(f"每日候選：{len(daily)} 檔")
+    lines += [f"・{r['代號']} {r['名稱']}" for r in daily] or ["（無）"]
+
+    lines += ["", f"網頁：{SITE_URL}", "僅為資料分析，不是投資建議；自負盈虧"]
     return "\n".join(lines)
 
 

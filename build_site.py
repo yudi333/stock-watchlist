@@ -272,7 +272,7 @@ def main():
         rows = [f'<div><b>日期</b>：{m["date"]}</div>',
                 f'<div><b>大盤</b>：加權 {m["close"]:,.2f}'
                 + (f'　{pct_badge(m.get("chg_pts"), m["chg_pct"])}' if m.get("chg_pct") is not None else '')
-                + f'（月線 {m["ma20"]:,.2f}／季線 {m["ma60"]:,.2f}）{html.escape(m["text"])}</div>']
+                + '</div>']
         # 櫃買、夜盤都是「現價快照」，Yahoo 沒提供完整歷史資料，只能顯示現價漲跌，不像大盤（加權指數）
         # 能算月線/季線判斷多空；個別欄位格式不對就跳過那一行，不影響日期/大盤這兩行一定會顯示
         try:

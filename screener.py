@@ -366,7 +366,10 @@ def snapshot(df):
     rd, rw = evaluate(df, DAILY), evaluate(to_weekly(df), WEEKLY)
     sigs = signal_rows("日線", rd) + signal_rows("週線", rw)
     level, advice = advise(tags, sigs)
-    core = dict(date=df.index[-1].strftime("%Y-%m-%d"), close=r2(last),
+    # prev/high/low：給網頁判斷「今天是否漲停/跌停、有沒有觸及漲跌停但收盤拉回」用
+    # （漲跌停價要用前一天的原始收盤價算，不能用四捨五入過的 chg% 反推，會有誤差）
+    core = dict(date=df.index[-1].strftime("%Y-%m-%d"), close=r2(last), prev=r2(prev),
+                high=r2(df["High"].iloc[-1]), low=r2(df["Low"].iloc[-1]),
                 chg=round(row["day_change_pct"], 2), vs60=round((last / ma60.iloc[-1] - 1) * 100, 1),
                 rsi=round(rsi), vr=round(df["Volume"].iloc[-1] / avg_vol, 2) if avg_vol > 0 else 0,
                 fh=round((last / df["High"].iloc[-252:].max() - 1) * 100, 1),

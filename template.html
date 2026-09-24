@@ -33,6 +33,8 @@ table.picks td:nth-child(4){min-width:140px}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin:1px 4px 1px 0;border:1px solid currentColor}
 .t-bull{color:var(--good)}.t-weak{color:var(--bad)}.t-hot{color:var(--warn)}.t-mute{color:var(--muted)}
 .up{color:var(--good)}.down{color:var(--bad)}
+.fill-up{background:var(--good);color:#fff;font-weight:600;border-radius:4px;padding:2px 6px}
+.fill-down{background:var(--bad);color:#fff;font-weight:600;border-radius:4px;padding:2px 6px}
 .stopc{color:var(--bad)}.tpc{color:var(--good)}
 .links a{font-size:12px;margin-right:8px;color:var(--muted);text-decoration:none;border-bottom:1px dotted}
 .links a:hover{color:var(--text)}
@@ -253,7 +255,14 @@ __WEEKLY__
   }
   const num = (v, d = 2) => Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
   const signed = v => (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%';
+  const signedNum = (v, d = 2) => (v > 0 ? '+' : '') + num(v, d);
   const dir = v => v > 0 ? 'up' : v < 0 ? 'down' : '';
+  // 台股漲跌停：漲停＝前一天收盤×1.1 無條件捨去到檢定基準（升降單位）、跌停×0.9 無條件進位，
+  // 這樣漲跌幅才不會超過 10%。升降單位隨股價級距不同（越貴的股票，一檔跳動的價格越大）。
+  const tickSize = p => p < 10 ? 0.01 : p < 50 ? 0.05 : p < 100 ? 0.1 : p < 500 ? 0.5 : p < 1000 ? 1 : 5;
+  const limitUp = prev => { const raw = prev * 1.1, t = tickSize(raw); return Math.floor(raw / t) * t; };
+  const limitDown = prev => { const raw = prev * 0.9, t = tickSize(raw); return Math.ceil(raw / t) * t; };
+  const near = (a, b) => Math.abs(a - b) < 0.01;   // 浮點數誤差容許值
   const LV = { buy: 't-bull', left: 't-hot', watch: 't-mute', avoid: 't-weak' };
   const POS = { in: '現價在區間內', above: '現價高於區間，勿追', below: '現價低於區間，未到買點' };
   const LVNAME = { buy: '可留意買進', left: '左側觀察', watch: '觀望', avoid: '暫不買' };
@@ -271,6 +280,15 @@ __WEEKLY__
     const out = [el('span', { class: 'tag ' + LV[s.level] }, LVNAME[s.level])];
     s.tags.forEach(t => out.push(el('span', { class: 'tag t-mute' }, t)));
     return out;
+  }
+  function priceCellClass(s) {   // 收盤價格子的漲跌停標記：收在漲跌停＝底色填滿；只有影線碰到但收盤拉回＝文字上色
+    if (s.prev == null) return '';
+    const up = limitUp(s.prev), down = limitDown(s.prev);
+    if (near(s.close, up)) return 'fill-up';
+    if (near(s.close, down)) return 'fill-down';
+    if (s.high != null && near(s.high, up)) return 'up';
+    if (s.low != null && near(s.low, down)) return 'down';
+    return '';
   }
 
 
@@ -682,7 +700,7 @@ __WEEKLY__
     } else {
       const head = el('tr', {}, editing ? el('th', { class: 'chk' }) : null,
         el('th', { class: 'l hm' }, '代號'), el('th', { class: 'l' }, '名稱'),
-        ...['收盤', '離季線'].map(h => el('th', {}, h)), el('th', { class: 'hm' }, 'RSI'),
+        ...['收盤', '漲跌'].map(h => el('th', {}, h)), el('th', { class: 'hm' }, 'RSI'),
         el('th', { class: 'l' }, '判斷'), el('th', { class: 'l hm' }, '連結'));
       const rows = watch.flatMap(code => {
         const s = BY[code];
@@ -697,8 +715,11 @@ __WEEKLY__
           const nameCell = editing ? [s.name, codeM] : el('button', { class: 'foldbtn', 'aria-expanded': isOpen ? 'true' : 'false',
             title: '展開／收合前 6 個交易日', onclick: () => { isOpen ? open.delete(code) : open.add(code); renderWatch(); } },
             el('span', { class: 'caret' }, isOpen ? '▾' : '▸'), s.name, codeM);
+          const pts = s.prev != null ? s.close - s.prev : null;
           tr.append(el('td', { class: 'l hm' }, s.code), el('td', { class: 'l' }, nameCell),
-            el('td', {}, num(s.close)), el('td', { class: dir(s.vs60) }, signed(s.vs60)), el('td', { class: 'hm' }, String(s.rsi)),
+            el('td', { class: priceCellClass(s) }, num(s.close)),
+            el('td', { class: dir(s.chg) }, pts != null ? signedNum(pts) : '—', el('br'), el('small', {}, signed(s.chg))),
+            el('td', { class: 'hm' }, String(s.rsi)),
             el('td', { class: 'l' }, tagsOf(s)), el('td', { class: 'l hm' }, links(s)));
         }
         return (s && open.has(code) && !editing) ? [tr, ...histRows(s)] : [tr];

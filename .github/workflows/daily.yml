@@ -70,17 +70,37 @@ jobs:
     if: always()   # build 或 deploy 失敗也要通知，不然你只會看到網頁沒更新、不知道為什麼
     runs-on: ubuntu-latest
     steps:
+      - name: 算出今天的日期（台灣時間）
+        id: today
+        run: echo "date=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_OUTPUT"
+      - name: 檢查今天是否已經通知過
+        # 一天最多發一次：14:03/15:07/16:33 這三次收盤後的更新，只有當天第一次成功執行到
+        # 這裡的會真的發送，其餘兩次會跳過（但 build/deploy 一樣照跑、網頁一樣照常更新，
+        # 只是不會再發 Telegram）。做法：用當天日期當 cache key，第一次是 cache miss，
+        # 送出通知後把 .notified 存進 cache；之後同一天的執行會 cache hit 直接跳過。
+        id: notified
+        uses: actions/cache@v4
+        with:
+          path: .notified
+          key: notified-${{ steps.today.outputs.date }}
       - uses: actions/checkout@v4
+        if: steps.notified.outputs.cache-hit != 'true'
       - uses: actions/setup-python@v5
+        if: steps.notified.outputs.cache-hit != 'true'
         with:
           python-version: "3.11"
       - run: pip install requests
+        if: steps.notified.outputs.cache-hit != 'true'
       - uses: actions/download-artifact@v4
+        if: steps.notified.outputs.cache-hit != 'true'
         continue-on-error: true   # build 太早失敗、根本沒產生 message.txt 也沒關係
         with:
           name: notify-message
       - name: 傳送 Telegram 通知
-        run: python notify.py send "${{ needs.build.result }}" "${{ needs.deploy.result }}"
+        if: steps.notified.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .notified && date > .notified/sent
+          python notify.py send "${{ needs.build.result }}" "${{ needs.deploy.result }}"
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}

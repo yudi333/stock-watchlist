@@ -95,22 +95,43 @@ def limit_down(prev):
     return math.ceil((raw / t) - 1e-9) * t
 
 
-def price_class(code, by_code):
-    """收盤價的漲跌停標記（跟 template.html 的 priceCellClass() 同一套邏輯）：收在漲跌停＝
-    底色填滿；只有影線碰到但收盤沒守住＝文字上色。找不到資料（例如剛好資料延遲）就不標記。"""
-    s = by_code.get(str(code))
-    if not s or s.get("prev") is None:
-        return ""
+def _price_mark(s):
+    """收盤價的顏色與漲跌停標記（跟 template.html 的 priceMark() 同一套邏輯）：回傳
+    (css class, 要不要加星號)。預設依當天漲跌上色（漲紅跌綠）；收在漲跌停＝整格底色
+    填滿（蓋過預設顏色）；影線碰到漲跌停但收盤沒守住＝加星號，不再用文字變色。
+    找不到資料（例如剛好資料延遲）就只給預設顏色，不標記漲跌停。"""
+    if not s:
+        return "", False
+    cls = "up" if s.get("chg", 0) > 0 else ("down" if s.get("chg", 0) < 0 else "")
+    if s.get("prev") is None:
+        return cls, False
     close, up, down = s["close"], limit_up(s["prev"]), limit_down(s["prev"])
     if abs(close - up) < 0.01:
-        return "fill-up"
+        return "fill-up", False
     if abs(close - down) < 0.01:
-        return "fill-down"
+        return "fill-down", False
     if s.get("high") is not None and abs(s["high"] - up) < 0.01:
-        return "up"
+        return cls, True
     if s.get("low") is not None and abs(s["low"] - down) < 0.01:
-        return "down"
-    return ""
+        return cls, True
+    return cls, False
+
+
+def price_mark(code, by_code):
+    return _price_mark(by_code.get(str(code)))
+
+
+def price_badge_html(close, s):
+    """收盤價欄位的完整 HTML：顏色/漲跌停標記 + 後面的漲跌點數與漲跌幅（跟 notify.py 的 badge() 同樣式）。"""
+    cls, star = _price_mark(s)
+    price_html = f"{close:,.2f}" + ("<sup>＊</sup>" if star else "")
+    chg_html = ""
+    if s and s.get("prev") is not None:
+        pts, pct = close - s["prev"], s.get("chg", 0)
+        arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "－")
+        chg_cls = "up" if pct > 0 else ("down" if pct < 0 else "")
+        chg_html = f'<br><small class="{chg_cls}">{arrow}{abs(pts):,.2f}　{abs(pct):.2f}%</small>'
+    return f"<span class='{cls}' style='white-space:nowrap'>{price_html}</span>{chg_html}"
 
 
 def picks_table(csv_name, by_code):
@@ -127,9 +148,10 @@ def picks_table(csv_name, by_code):
         f"<tr><td class='l'>{r['代號']}</td><td class='l'>{html.escape(str(r['名稱']))}"
         f"<div class='links' style='margin-top:4px'>{links(r['代號'], r.get('Yahoo代號', ''))}</div>"
         f"<button class='btn sm' style='margin-top:4px' data-add='{r['代號']}'>＋觀察</button></td>"
-        f"<td class='l'>{html.escape(str(r['型態']))}"
+        f"<td class='l'>{'<br>'.join(html.escape(str(r['型態'])).split(' ', 1))}"
         + (' <span class="tag t-hot">左側</span>' if r.get("側別") == "左側" else "") + "</td>"
-        f"<td><span class='{price_class(r['代號'], by_code)}'>{r['收盤']:,.2f}</span></td>"
+        f"<td style='white-space:nowrap'><span class='{price_mark(r['代號'], by_code)[0]}'>{r['收盤']:,.2f}"
+        + ('<sup>＊</sup>' if price_mark(r['代號'], by_code)[1] else '') + "</span></td>"
         f"<td>{r['買進下限']:,.2f}～{r['買進上限']:,.2f}<br>"
         f"<small class='pos-{POS_CLASS.get(r['現價位置'], '')}'>{r['現價位置']}</small></td>"
         f"<td class='stopc'>{r['停損價']:,.2f}<br><small>-{r['風險%']}%</small></td>"
@@ -167,13 +189,15 @@ def multi_signal_html(stocks):
                 f"停利 <span class='tpc'>{g['target']:,.2f}</span>（+{g['gain']}%）　"
                 f"賺賠比 {g['rr']}</small></div>" for g in right)
             mkt = st["mkt"]
+            name_links = links(st["code"], ".TWO" if mkt == "TPEX" else ".TW")
             rows += (f"<tr><td class='l'><a href='#' data-detail='{st['code']}'>{st['code']}</a></td>"
-                     f"<td class='l'>{html.escape(st['name'])}<br><span class='tag t-bull'>{n} 個訊號</span></td>"
-                     f"<td>{st['close']:,.2f}</td><td class='l reason' style='color:inherit'>{lines}</td>"
-                     f"<td class='l links'>{links(st['code'], '.TWO' if mkt == 'TPEX' else '.TW')}"
-                     f"<br><button class='btn sm' data-add='{st['code']}'>＋觀察</button></td></tr>")
+                     f"<td class='l'>{html.escape(st['name'])}<br><span class='tag t-bull'>{n} 個訊號</span>"
+                     f"<div class='links' style='margin-top:4px'>{name_links}</div>"
+                     f"<button class='btn sm' style='margin-top:4px' data-add='{st['code']}'>＋觀察</button></td>"
+                     f"<td>{price_badge_html(st['close'], st)}</td>"
+                     f"<td class='l reason' style='color:inherit'>{lines}</td></tr>")
         table = ('<div class="tablewrap"><table class="multi"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
-                 '<th>收盤</th><th class="l">符合的訊號與價位</th><th class="l">連結</th></tr></thead>'
+                 '<th>收盤</th><th class="l">符合的訊號與價位</th></tr></thead>'
                  f"<tbody>{rows}</tbody></table></div>")
     return (f'<h2>多重訊號：同時符合 2 個（含）以上買進訊號（{len(found)} 檔）</h2>'
             '<div class="sub">點代號可看每個訊號的詳細理由。</div>'

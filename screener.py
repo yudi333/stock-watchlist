@@ -403,7 +403,7 @@ def analyze_stock(item, df, inst_notes=None):
         if len(sub) < 130:
             break
         h, _, _ = snapshot(sub)
-        hist.append(dict(d=h["date"], c=h["close"], g=h["chg"], v=h["vs60"], r=h["rsi"], l=h["level"],
+        hist.append(dict(d=h["date"], c=h["close"], p=h["prev"], g=h["chg"], r=h["rsi"], l=h["level"],
                          t=h["tags"], s=[[g["name"], g["side"], g["tf"], g["lo"], g["hi"], g["stop"], g["target"]]
                                          for g in h["sigs"]]))
     rec["hist"] = hist

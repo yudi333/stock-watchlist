@@ -19,8 +19,8 @@ h2{font-size:16px;margin:28px 0 10px}
 .tablewrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
 table{border-collapse:collapse;width:100%;min-width:560px}
 th,td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
-th{font-size:12px;color:var(--muted);font-weight:600}
-th.l,td.l{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:600;text-align:center}
+td.l{text-align:left}
 tr:last-child td{border-bottom:0}
 table.picks{min-width:0}
 table.picks td{white-space:normal}
@@ -82,7 +82,7 @@ table.multi{min-width:720px}
 table.multi td{vertical-align:top}
 td a[data-detail]{color:var(--accent);text-decoration:none;border-bottom:1px dotted}
 .dm{display:none;color:var(--muted);font-size:11px;line-height:1.3}
-/* 手機（窄螢幕）：觀察清單隱藏 RSI 與連結，讓「判斷」看得到；工具列文字獨佔一行 */
+/* 手機（窄螢幕）：觀察清單隱藏 RSI，讓「判斷」看得到；工具列文字獨佔一行 */
 @media (max-width:560px){
   .hm{display:none}
   table.watch{min-width:0}
@@ -183,10 +183,10 @@ __MARKET__
 __MULTI__
 
 <h2>每日候選：可留意的買進標的</h2>
-<div class="sub">每日15點自動更新。</div>
+<div class="sub">每日17點自動更新。</div>
 __DAILY__
 <h2>每週候選（週線，中期趨勢）</h2>
-<div class="sub">每週五15點自動更新。</div>
+<div class="sub">每週五17點自動更新。</div>
 __WEEKLY__
 
 <footer class="sitefooter">
@@ -282,14 +282,27 @@ __WEEKLY__
     s.tags.forEach(t => out.push(el('span', { class: 'tag t-mute' }, t)));
     return out;
   }
-  function priceCellClass(s) {   // 收盤價格子的漲跌停標記：收在漲跌停＝底色填滿；只有影線碰到但收盤拉回＝文字上色
-    if (s.prev == null) return '';
-    const up = limitUp(s.prev), down = limitDown(s.prev);
-    if (near(s.close, up)) return 'fill-up';
-    if (near(s.close, down)) return 'fill-down';
-    if (s.high != null && near(s.high, up)) return 'up';
-    if (s.low != null && near(s.low, down)) return 'down';
-    return '';
+  function holdingTagsOf(s) {   // 持股已經買了，不需要「可留意買進」這類進場等級標籤，「多方」也拿掉，只留風險提醒
+    return s.tags.filter(t => t !== '多方').map(t => el('span', { class: 'tag t-mute' }, t));
+  }
+  function priceMark(s) {
+    // 收盤／現價的顏色與漲跌停標記：預設依當天漲跌上色（漲紅跌綠，跟觀察清單、持股的
+    // 顏色邏輯一致）；收在漲跌停＝整格底色填滿（蓋過預設顏色）；影線碰到漲跌停但收盤
+    // 沒守住＝加一個小「＊」註記，不再用文字變色（避免跟預設的漲跌色搞混）。
+    const cls = dir(s.chg);
+    let fillCls = '', star = false;
+    if (s.prev != null) {
+      const up = limitUp(s.prev), down = limitDown(s.prev);
+      if (near(s.close, up)) fillCls = 'fill-up';
+      else if (near(s.close, down)) fillCls = 'fill-down';
+      else if (s.high != null && near(s.high, up)) star = true;
+      else if (s.low != null && near(s.low, down)) star = true;
+    }
+    return { cls: fillCls || cls, star };
+  }
+  function priceSpan(s, price) {   // price 通常是 s.close；持股的現價可能是盤中價，仍用 s 的漲跌方向/漲跌停資訊
+    const m = priceMark(s);
+    return el('span', { class: m.cls, style: 'white-space:nowrap' }, num(price), m.star ? el('sup', {}, '＊') : null);
   }
 
 
@@ -302,7 +315,7 @@ __WEEKLY__
   // 賣掉，而是讓獲利有機會繼續跑，同時保護已經賺到的部分。
   // 參考：https://rich01.com/what-is-trailing-stop-0/（短線建議 3~10%、波段建議 10~20%）
   const HKEY = 'stock_watchlist_holdings_v1';
-  const RR = 2.0;   // 「原始停利參考」用「風險的 2 倍」，跟課程的賺賠比 2:1 一致（僅供參考，不是強制出場點）
+  const RR = 2.0;   // 「原始停利參考」用「風險的 2 倍」，賺賠比 2:1（僅供參考，不是強制出場點）
   function loadHoldings() { try { const v = JSON.parse(localStorage.getItem(HKEY)); if (Array.isArray(v)) return v; } catch (e) {} return []; }
   // 同樣道理：登入帳號時不寫這個 key，避免登出、換登另一個帳號時把上一個帳號的持股帶過去。
   function saveHoldings() { if (fbUser) return; try { localStorage.setItem(HKEY, JSON.stringify(holdings)); } catch (e) {} }
@@ -394,14 +407,14 @@ __WEEKLY__
     const stop = holdingStop(hd), refTarget = holdingTarget(hd), peak = peakOf(hd);
     const c = currentPrice(hd, s);
     if (c <= stop) return { cls: 'st-stop', text: hd.trailing
-      ? `觸及移動停損：現價 ${num(c)} ≤ 移動停損 ${num(stop)}（最高 ${num(peak)} 回落 ${hd.stopPct}%），建議賣出`
-      : `達停損：現價 ${num(c)} ≤ 停損價 ${num(stop)}，建議賣出` };
+      ? `已觸及移動停損 ${num(stop)}，建議賣出`
+      : `已達停損 ${num(stop)}，建議賣出` };
     if (hd.trailing) {
       const why = peak >= refTarget ? '已達停利參考' : '季線轉弱';
-      return { cls: 'st-target', text: `${why}，已改採移動停損：目前上移到 ${num(stop)}（最高 ${num(peak)}），可依紀律出場或續抱讓獲利繼續跑` };
+      return { cls: 'st-target', text: `${why}，移動停損上移至 ${num(stop)}` };
     }
-    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: `續抱：目前用固定停損 ${num(stop)}；短線過熱留意拉回` };
-    return { cls: 'st-hold', text: `續抱：目前用固定停損 ${num(stop)}，停利參考 ${num(refTarget)}（達到，或季線轉弱，才會改用移動停損）` };
+    if (s.tags.includes('過熱，不追')) return { cls: 'st-weak', text: `固定停損 ${num(stop)}，短線過熱` };
+    return { cls: 'st-hold', text: `固定停損 ${num(stop)}，停利參考 ${num(refTarget)}` };
   }
   function addHolding(hd) {
     const rec = { peak: hd.buyPrice, trailing: false, ...hd };
@@ -483,17 +496,18 @@ __WEEKLY__
         el('th', { class: 'l' }, '趨勢與建議'), el('th', { class: 'l' }, ''));
       const rows = holdings.map(hd => {
         const s = BY[hd.code], stop = holdingStop(hd), target = holdingTarget(hd), v = holdingVerdict(hd, s);
-        const c = currentPrice(hd, s), isLive = LIVE[hd.code] != null;
+        const c = currentPrice(hd, s);
         const pnl = c == null ? null : (c / hd.buyPrice - 1) * 100;
         return el('tr', { class: v.cls === 'st-stop' ? 'row-stop' : '' },
-          el('td', { class: 'l' }, hd.code), el('td', { class: 'l' }, s ? s.name : '？'),
+          el('td', { class: 'l' }, hd.code),
+          el('td', { class: 'l' }, s ? [s.name, el('div', { class: 'links', style: 'margin-top:4px' }, links(s))] : '？'),
           el('td', {}, hd.buyDate), el('td', {}, num(hd.buyPrice)), el('td', {}, num(peakOf(hd))),
-          el('td', {}, c == null ? '—' : num(c), el('br'), el('small', { style: 'color:var(--muted)' }, isLive ? '盤中' : '收盤')),
+          el('td', {}, c == null ? '—' : (s ? priceSpan(s, c) : num(c))),
           el('td', { class: pnl == null ? '' : dir(pnl) }, pnl == null ? '—' : signed(pnl)),
           el('td', { class: 'stopc' }, num(stop)), el('td', { class: 'tpc' }, num(target)),
           el('td', { class: 'l' },
             el('div', { class: 'hstatus ' + v.cls }, v.text),
-            s ? el('div', { style: 'margin-top:6px' }, tagsOf(s), ' ', links(s)) : null),
+            s ? el('div', { style: 'margin-top:6px' }, holdingTagsOf(s)) : null),
           el('td', { class: 'l' }, el('a', { href: '#', class: 'hclose', onclick: e => { e.preventDefault(); removeHolding(hd.id); } }, '刪除')));
       });
       box.append(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, head), el('tbody', {}, rows))));
@@ -670,11 +684,13 @@ __WEEKLY__
       const wd = WD[new Date(x.d + 'T00:00:00').getDay()];
       const sigs = x.s.map(g => el('div', { class: 'hsig' },
         `${g[0]}（${g[2]}${g[1] === '左側' ? '．左側' : ''}）　買 ${num(g[3])}～${num(g[4])}（當天收盤${x.c > g[4] ? '高於區間' : x.c < g[3] ? '低於區間' : '在區間內'}）　損 ${num(g[5])}　利 ${num(g[6])}`));
+      const prevC = i + 1 < s.hist.length ? s.hist[i + 1].c : (x.p != null ? x.p : null);
+      const xPts = prevC != null ? x.c - prevC : null;
       return el('tr', { class: 'child' },
         el('td', { class: 'l hm' }, x.d.slice(5) + ' 週' + wd),
         el('td', { class: 'l' }, el('span', { class: 'dm' }, x.d.slice(5) + ' 週' + wd), el('span', { class: 'hm' }, `前 ${i + 1} 個交易日 `), el('span', { class: 'tag ' + (x.src === 'rec' ? 't-rec' : 't-mute'), title: x.src === 'rec' ? '當天實際算出的結果，之後改規則也不會變' : '還沒有當時的記錄，用今天的規則回頭重算' }, x.src === 'rec' ? '當時記錄' : '重算')),
-        el('td', {}, num(x.c), el('br'), el('small', { class: dir(x.g) }, signed(x.g))),
-        el('td', { class: dir(x.v) }, signed(x.v)), el('td', { class: 'hm' }, String(x.r)),
+        el('td', { class: dir(x.g) }, num(x.c)),
+        el('td', { class: dir(x.g) }, xPts != null ? signedNum(xPts) : '—', el('br'), el('small', {}, signed(x.g))), el('td', { class: 'hm' }, String(x.r)),
         el('td', { class: 'l' }, el('span', { class: 'tag ' + LV[x.l] }, LVNAME[x.l]),
           x.t.map(t => el('span', { class: 'tag t-mute' }, t)), sigs),
         el('td', { class: 'l hm' }));
@@ -702,14 +718,14 @@ __WEEKLY__
       const head = el('tr', {}, editing ? el('th', { class: 'chk' }) : null,
         el('th', { class: 'l hm' }, '代號'), el('th', { class: 'l' }, '名稱'),
         ...['收盤', '漲跌'].map(h => el('th', {}, h)), el('th', { class: 'hm' }, 'RSI'),
-        el('th', { class: 'l' }, '判斷'), el('th', { class: 'l hm' }, '連結'));
+        el('th', { class: 'l' }, '判斷'));
       const rows = watch.flatMap(code => {
         const s = BY[code];
         const toggle = () => { sel.has(code) ? sel.delete(code) : sel.add(code); renderWatch(); };
         const chk = editing ? el('td', { class: 'chk' }, el('input', { type: 'checkbox', checked: sel.has(code) ? 'checked' : false, onclick: e => { e.stopPropagation(); toggle(); } })) : null;
         const tr = el('tr', { class: sel.has(code) ? 'sel' : '', onclick: editing ? toggle : null }, chk);
         if (!s) {
-          tr.append(el('td', { class: 'l' }, code), el('td', { class: 'l', colspan: 6 }, '查無資料（可能已下市或代號有誤）'));
+          tr.append(el('td', { class: 'l' }, code), el('td', { class: 'l', colspan: 5 }, '查無資料（可能已下市或代號有誤）'));
         } else {
           const isOpen = open.has(code);
           const codeM = el('small', { class: 'dm' }, s.code);
@@ -717,11 +733,12 @@ __WEEKLY__
             title: '展開／收合前 6 個交易日', onclick: () => { isOpen ? open.delete(code) : open.add(code); renderWatch(); } },
             el('span', { class: 'caret' }, isOpen ? '▾' : '▸'), s.name, codeM);
           const pts = s.prev != null ? s.close - s.prev : null;
-          tr.append(el('td', { class: 'l hm' }, s.code), el('td', { class: 'l' }, nameCell),
-            el('td', {}, el('span', { class: priceCellClass(s) }, num(s.close))),
+          tr.append(el('td', { class: 'l hm' }, s.code),
+            el('td', { class: 'l' }, nameCell, el('div', { class: 'links', style: 'margin-top:4px' }, links(s))),
+            el('td', {}, priceSpan(s, s.close)),
             el('td', { class: dir(s.chg) }, pts != null ? signedNum(pts) : '—', el('br'), el('small', {}, signed(s.chg))),
             el('td', { class: 'hm' }, String(s.rsi)),
-            el('td', { class: 'l' }, tagsOf(s)), el('td', { class: 'l hm' }, links(s)));
+            el('td', { class: 'l' }, tagsOf(s)));
         }
         return (s && open.has(code) && !editing) ? [tr, ...histRows(s)] : [tr];
       });
@@ -770,7 +787,9 @@ __WEEKLY__
           el('button', { class: 'btn primary', disabled: inList, onclick: () => addToWatch(code) }, inList ? '已在觀察清單' : '加入觀察清單'),
           el('button', { class: 'btn sm', onclick: () => { current = null; box.replaceChildren(); } }, '關閉'))),
       el('div', { class: 'metrics' },
-        metric('收盤', num(s.close)), metric('今日', signed(s.chg), dir(s.chg)), metric('離季線', signed(s.vs60), dir(s.vs60)),
+        metric('收盤', priceSpan(s, s.close)),
+        metric('今日', s.prev != null ? `${signedNum(s.close - s.prev)}　${signed(s.chg)}` : signed(s.chg), dir(s.chg)),
+        metric('離季線', signed(s.vs60), dir(s.vs60)),
         metric('RSI', String(s.rsi)), metric('量比', s.vr + ' 倍'), metric('距 52 週高', signed(s.fh))),
       el('div', { class: 'verdict ' + LV[s.level] }, el('b', {}, LVNAME[s.level] + '：'), s.advice, ' ', ...s.tags.map(t => el('span', { class: 'tag t-mute' }, t)))
     ];
@@ -787,7 +806,7 @@ __WEEKLY__
       parts.push(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, el('tr', {}, th)), el('tbody', {}, rows))),
         el('div', { class: 'sub', style: 'margin:8px 0 0' }, '停損請以收盤價跌破為準。這是規則篩選，不是預測或投資建議。'));
     } else {
-      parts.push(el('div', { class: 'sub', style: 'margin:8px 0 0' }, '目前日線與週線都沒有符合課程買進訊號的型態。'));
+      parts.push(el('div', { class: 'sub', style: 'margin:8px 0 0' }, '目前日線與週線都沒有符合買進訊號的型態。'));
     }
     box.append(el('div', { class: 'detail' }, parts));
   }

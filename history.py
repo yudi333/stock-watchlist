@@ -49,7 +49,7 @@ def load_previous():
 
 def compact(rec):
     """一檔股票「當天」要記錄的精簡內容（和網頁展開列用的格式相同）。"""
-    return dict(c=rec["close"], g=rec["chg"], v=rec["vs60"], r=rec["rsi"], l=rec["level"], t=rec["tags"],
+    return dict(c=rec["close"], p=rec["prev"], g=rec["chg"], r=rec["rsi"], l=rec["level"], t=rec["tags"],
                 s=[[g["name"], g["side"], g["tf"], g["lo"], g["hi"], g["stop"], g["target"]] for g in rec["sigs"]])
 
 

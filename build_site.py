@@ -122,16 +122,19 @@ def price_mark(code, by_code):
 
 
 def price_badge_html(close, s):
-    """收盤價欄位的完整 HTML：顏色/漲跌停標記 + 後面的漲跌點數與漲跌幅（跟 notify.py 的 badge() 同樣式）。"""
+    """收盤價欄位的 HTML：顏色（漲紅跌綠）+ 漲跌停標記（整格填色／右上『＊』）。"""
     cls, star = _price_mark(s)
     price_html = f"{close:,.2f}" + ("<sup>＊</sup>" if star else "")
-    chg_html = ""
-    if s and s.get("prev") is not None:
-        pts, pct = close - s["prev"], s.get("chg", 0)
-        arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "－")
-        chg_cls = "up" if pct > 0 else ("down" if pct < 0 else "")
-        chg_html = f'<br><small class="{chg_cls}">{arrow}{abs(pts):,.2f}　{abs(pct):.2f}%</small>'
-    return f"<span class='{cls}' style='white-space:nowrap'>{price_html}</span>{chg_html}"
+    return f"<span class='{cls}' style='white-space:nowrap'>{price_html}</span>"
+
+
+def change_cell_html(s):
+    """漲跌欄位：漲跌點數在上、漲跌幅在下面的小字，跟觀察清單的漲跌欄同樣式。"""
+    if not s or s.get("prev") is None:
+        return "—"
+    pts, pct = s["close"] - s["prev"], s.get("chg", 0)
+    cls = "up" if pct > 0 else ("down" if pct < 0 else "")
+    return f"<span class='{cls}'>{pts:+,.2f}<br><small>{pct:+.1f}%</small></span>"
 
 
 def picks_table(csv_name, by_code):
@@ -190,14 +193,16 @@ def multi_signal_html(stocks):
                 f"賺賠比 {g['rr']}</small></div>" for g in right)
             mkt = st["mkt"]
             name_links = links(st["code"], ".TWO" if mkt == "TPEX" else ".TW")
-            rows += (f"<tr><td class='l'><a href='#' data-detail='{st['code']}'>{st['code']}</a></td>"
-                     f"<td class='l'>{html.escape(st['name'])}<br><span class='tag t-bull'>{n} 個訊號</span>"
+            rows += (f"<tr><td class='l'><a href='#' data-detail='{st['code']}'>{st['code']}</a>"
+                     f"<br><span class='tag t-bull'>{n} 個訊號</span></td>"
+                     f"<td class='l'>{html.escape(st['name'])}"
                      f"<div class='links' style='margin-top:4px'>{name_links}</div>"
                      f"<button class='btn sm' style='margin-top:4px' data-add='{st['code']}'>＋觀察</button></td>"
                      f"<td>{price_badge_html(st['close'], st)}</td>"
+                     f"<td>{change_cell_html(st)}</td>"
                      f"<td class='l reason' style='color:inherit'>{lines}</td></tr>")
         table = ('<div class="tablewrap"><table class="multi"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
-                 '<th>收盤</th><th class="l">符合的訊號與價位</th></tr></thead>'
+                 '<th>收盤</th><th>漲跌</th><th class="l">符合的訊號與價位</th></tr></thead>'
                  f"<tbody>{rows}</tbody></table></div>")
     return (f'<h2>多重訊號：同時符合 2 個（含）以上買進訊號（{len(found)} 檔）</h2>'
             '<div class="sub">點代號可看每個訊號的詳細理由。</div>'

@@ -439,7 +439,10 @@ __WEEKLY__
     return el('div', { class: 'hpick' }, inp, box);
   }
   function holdingAddBtn() {
-    return el('button', { class: 'btn primary sm', onclick: () => { addingHolding = true; renderHoldings(); } }, '＋ 記錄一筆買進');
+    return el('button', { class: 'btn primary sm', onclick: () => {
+      if (!requireLogin()) return;
+      addingHolding = true; renderHoldings();
+    } }, '＋ 記錄一筆買進');
   }
   function holdingForm() {
     const today = new Date().toISOString().slice(0, 10);
@@ -551,6 +554,19 @@ __WEEKLY__
   }
   function fbSignOut() { auth.signOut(); }
 
+  // 加入觀察清單／記錄持股都要先登入才能用（資料要同步到帳號，不再支援匿名存在瀏覽器裡）；
+  // 沒設定 Firebase（fbReady=false）時沒有登入系統可言，維持原本可以直接用的行為。
+  // 回傳 true 才可以繼續原本的動作，false 表示已經跳出登入面板、擋下這次操作。
+  let acctJustOpened = false;   // 這裡打開面板的同一次點擊，會冒泡到 document 的「點外面關閉」邏輯，
+                                // 用這個旗標讓那段邏輯知道「這次不要關」，見下面 document 的 click 監聽
+  function requireLogin() {
+    if (!fbReady || fbUser) return true;
+    acctOpen = true; acctJustOpened = true; renderAccount();
+    $('account').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    toast('請先登入才能使用這個功能');
+    return false;
+  }
+
   // 帳號按鈕放在右上角，點了才彈出面板（登入表單或登出），不點就完全不佔畫面空間。
   let acctOpen = false;
   function renderAccount() {
@@ -571,7 +587,7 @@ __WEEKLY__
       const email = el('input', { type: 'email', placeholder: 'Email', autocomplete: 'email' });
       const pw = el('input', { type: 'password', placeholder: '密碼（至少 6 碼）', autocomplete: 'current-password' });
       panel.append(el('div', { class: 'syncbox' },
-        el('div', { class: 'hint' }, '登入後，觀察清單和持股會同步到你自己的帳號，換裝置登入同一個帳號就看得到，其他人看不到。不登入也完全可以用，資料只留在這個瀏覽器。'),
+        el('div', { class: 'hint' }, '登入後才能加入觀察清單、記錄持股，資料會同步到你自己的帳號，換裝置登入同一個帳號就看得到，其他人看不到。'),
         el('button', { class: 'gbtn', style: 'margin-top:10px;width:100%', onclick: fbSignInGoogle }, '使用 Google 登入'),
         el('div', { class: 'orsep' }, '或用 Email'),
         el('div', { style: 'margin-top:8px' }, email),
@@ -783,7 +799,7 @@ __WEEKLY__
       el('div', { class: 'head' },
         el('div', {}, el('h3', {}, `${s.code} ${s.name}`), el('div', { class: 'sub', style: 'margin:0' }, s.mkt === 'TPEX' ? '上櫃' : '上市')),
         el('div', { class: 'toolbar', style: 'margin:0' }, links(s),
-          el('button', { class: 'btn primary', disabled: inList, onclick: () => addToWatch(code) }, inList ? '已在觀察清單' : '加入觀察清單'),
+          el('button', { class: 'btn primary', disabled: inList, onclick: () => { if (requireLogin()) addToWatch(code); } }, inList ? '已在觀察清單' : '加入觀察清單'),
           el('button', { class: 'btn sm', onclick: () => { current = null; box.replaceChildren(); } }, '關閉'))),
       el('div', { class: 'metrics' },
         metric('收盤', priceSpan(s, s.close)),
@@ -811,10 +827,14 @@ __WEEKLY__
   }
 
   document.addEventListener('click', e => {
-    const b = e.target.closest('[data-add]'); if (b) addToWatch(b.dataset.add);
+    // 點面板外面就關閉——但如果面板是「這次點擊」才被 requireLogin() 打開的（例如按鈕自己的
+    // onclick 呼叫 requireLogin() 後，事件才冒泡到這裡），acctJustOpened 會是 true，跳過這次，
+    // 不然剛打開的登入面板會被同一次點擊馬上關掉。
+    if (acctOpen && !acctJustOpened && !e.target.closest('#account')) { acctOpen = false; renderAccount(); }
+    acctJustOpened = false;
+    const b = e.target.closest('[data-add]'); if (b && requireLogin()) addToWatch(b.dataset.add);
     const d = e.target.closest('[data-detail]');
     if (d) { e.preventDefault(); showDetail(d.dataset.detail); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-    if (acctOpen && !e.target.closest('#account')) { acctOpen = false; renderAccount(); }   // 點面板外面就關閉
   });
   refresh();
   renderHoldings();

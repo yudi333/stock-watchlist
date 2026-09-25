@@ -121,7 +121,7 @@ def main():
         run_url = os.environ.get("RUN_URL", "")
         if build == "success" and deploy == "success" and MESSAGE_FILE.exists():
             return send(MESSAGE_FILE.read_text(encoding="utf-8"))
-        return send(f"台股觀察清單更新失敗（分析：{build}，發布：{deploy}）\n"
+        return send(f"DiStocks 更新失敗（分析：{build}，發布：{deploy}）\n"
                     f"網頁還是上一次的內容。請查看：{run_url}")
     print(__doc__)
     return 1

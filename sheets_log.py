@@ -14,6 +14,7 @@
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 import pandas as pd
@@ -94,7 +95,11 @@ def main():
     try:
         sh = connect()
     except Exception as e:
-        print(f"[注意] 連線 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。")
+        # {e} 有時候是空字串（某些例外不會帶訊息，例如底層函式庫丟出的 PermissionError），
+        # 只印類型名稱看不出真正原因，所以連完整 traceback 一起印出來，方便到 Actions
+        # 的執行紀錄裡直接看到是哪一行、哪個函式庫丟出來的
+        print(f"[注意] 連線 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。完整錯誤：")
+        traceback.print_exc()
         return 0   # 不該讓網頁發布跟著失敗
     if sh is None:
         return 0
@@ -110,7 +115,8 @@ def main():
         n3 = append_rows(sh, "每週候選", candidates_rows("candidates_weekly.csv"))
         print(f"已記錄到 Google 試算表：多重訊號 {n1} 列、每日候選 {n2} 列、每週候選 {n3} 列")
     except Exception as e:
-        print(f"[注意] 寫入 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。")
+        print(f"[注意] 寫入 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。完整錯誤：")
+        traceback.print_exc()
     return 0
 
 

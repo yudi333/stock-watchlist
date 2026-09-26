@@ -44,6 +44,28 @@ jobs:
       - run: python notify.py make   # 產生 Telegram 通知的摘要文字（message.txt），給最後的 notify job 用
         if: always()
         continue-on-error: true      # 產生摘要失敗不該讓網頁發布跟著失敗
+      - name: 算出今天的日期（台灣時間）
+        id: sheet_date
+        run: echo "date=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_OUTPUT"
+      - name: 檢查今天是否已經記錄到 Google 試算表
+        # 一天最多記一次，理由跟下面 notify job 的「一天最多發一次」一樣：這個 job 一天會跑
+        # 3 次，只有第一次真的把當天的多重訊號／候選股寫進試算表，其餘兩次跳過，不會重複累積。
+        id: sheet_logged
+        uses: actions/cache@v4
+        with:
+          path: .sheet-logged
+          key: sheet-logged-${{ steps.sheet_date.outputs.date }}
+      - run: pip install gspread google-auth   # 只有平常用不到，需要時才裝，維持其他步驟的安裝速度
+        if: steps.sheet_logged.outputs.cache-hit != 'true'
+      - name: 記錄到 Google 試算表
+        if: steps.sheet_logged.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .sheet-logged && date > .sheet-logged/done
+          python sheets_log.py
+        continue-on-error: true   # 沒設定或寫入失敗都不該讓網頁發布跟著失敗
+        env:
+          GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
+          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
       - uses: actions/upload-artifact@v4   # 存成 artifact 讓 notify job（別的 runner）讀得到
         if: always()
         with:

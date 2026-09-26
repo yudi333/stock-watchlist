@@ -329,3 +329,39 @@ Yahoo／證交所那天資料延遲比較久的日子（會在頁面上方看到
 
 token 等同密碼，不要寫進程式碼、不要貼給別人；只放在 GitHub 的 Secrets 裡（那邊看不到明文，
 連你自己之後也看不到，只能重新產生新的）。
+
+## 記錄到 Google 試算表
+
+[sheets_log.py](sheets_log.py) 把每天的「多重訊號／每日候選／每週候選」記錄到 Google 試算表，
+逐日累積成歷史紀錄——每天執行是**新增一批列**，不會覆蓋前一天，方便之後回頭看某一天到底出現過
+哪些訊號、後來股價實際走勢如何。一天最多記一次（跟 Telegram 通知一樣的機制，`daily-update`
+一天跑 3 次，只有第一次真的寫入，見 [daily.yml](.github/workflows/daily.yml)）。
+
+**分頁與欄位**：
+- **多重訊號**：日期、代號、名稱、收盤、漲跌%、符合訊號數、訊號內容（文字摘要，跟網頁上的
+  「多重訊號」判斷邏輯一致：同時符合 2 個以上不同種類的右側買進訊號，過熱的不算）
+- **每日候選／每週候選**：直接對應 `candidates_daily.csv` / `candidates_weekly.csv` 的欄位
+  （代號、名稱、型態、收盤、買進區間、停損、停利、賺賠比、理由...），只是把「資料日期」搬到
+  最前面統一叫「日期」
+
+分頁第一次用到時會自動建立、自動補上標題列，不用自己先建好。
+
+### 設定步驟
+
+1. 到 [Google Cloud Console](https://console.cloud.google.com) 建一個新專案（免費）
+2. 左上角選單找 **API 和服務 → 程式庫**，搜尋 **Google Sheets API**，按「啟用」
+3. **API 和服務 → 憑證 → 建立憑證 → 服務帳號**，名字隨意，建立後點進去、**金鑰 → 新增金鑰 →
+   JSON**，會下載一個 JSON 檔——這是唯一能看到內容的機會，妥善保管
+4. 打開剛剛下載的 JSON 檔，複製裡面 `"client_email"` 那個信箱（類似
+   `xxx@xxx.iam.gserviceaccount.com`）
+5. 到 [Google 試算表](https://sheets.google.com) 建一個新的試算表（分頁不用先建，程式會自己建），
+   右上角「共用」，把剛剛複製的服務帳號信箱加進去，權限給**編輯者**
+6. 網址列會長得像 `https://docs.google.com/spreadsheets/d/這一段就是ID/edit`，複製中間那段 ID
+7. 到 GitHub 這個 repo 的 **Settings → Secrets and variables → Actions → New repository secret**，
+   新增兩個：
+   - `GOOGLE_SHEETS_KEY`：把整個 JSON 檔的內容原封不動貼進去
+   - `GOOGLE_SHEETS_ID`：剛剛複製的試算表 ID
+8. 存好之後，下次 `daily-update` 執行完就會開始記錄；沒設定這兩個 secret 也完全不影響網站本身，
+   只是不會記錄（`sheets_log.py` 會自己偵測、跳過，不會讓更新失敗）
+
+JSON 金鑰等同密碼，不要寫進程式碼、不要貼給別人；只放在 GitHub 的 Secrets 裡。

@@ -86,11 +86,42 @@ def connect():
     return gspread.authorize(creds).open_by_key(sheet_id)
 
 
+# 交錯底色，讓連續插入的每一批（＝每一個有記錄的日子）一眼就看得出分界在哪裡：
+# 白色／Google 試算表調色盤內建的「淺灰色 1」，兩者輪流。
+FILL_WHITE = {"red": 1, "green": 1, "blue": 1}
+FILL_GRAY = {"red": 217 / 255, "green": 217 / 255, "blue": 217 / 255}
+META_SHEET = "_設定"      # 記著「每個分頁上次用了哪個顏色」的隱藏用分頁，不是資料
+
+
+def next_fill_color(sh, title):
+    """跟這個分頁上次記錄的顏色相反：讀 _設定 分頁記著的上次顏色，這次換另一種，並把新的
+    存回去。三個分頁（多重訊號／每日候選／每週候選）分開各記各的——不能共用同一個顏色狀態，
+    不然某天剛好某個分頁沒有候選股（0 列，沒真的插入），沒資料卻也算跳過一輪顏色，會害那個
+    分頁下一次真正有資料時顏色接不起來（跟它自己前一批緊鄰卻同色）。用分頁名稱找 _設定裡
+    對應的那一列，找不到就當作還沒記錄過、從白色開始。"""
+    import gspread
+    try:
+        meta = sh.worksheet(META_SHEET)
+    except gspread.WorksheetNotFound:
+        meta = sh.add_worksheet(title=META_SHEET, rows=10, cols=2)
+        meta.append_row(["分頁", "上次記錄用的底色（不要刪除這個分頁）"])
+    cell = meta.find(title, in_column=1)   # 找不到會回傳 None（不是丟例外）
+    last = meta.cell(cell.row, 2).value if cell else None
+    this_time, next_time = (FILL_GRAY, "gray") if last == "white" else (FILL_WHITE, "white")
+    if cell:
+        meta.update_cell(cell.row, 2, next_time)
+    else:
+        meta.append_row([title, next_time])
+    return this_time
+
+
 def insert_rows_top(sh, title, rows):
-    """插入在標題列（第 1 列）正下方，日期新的一直往上疊，最新一批永遠在最上面。"""
+    """插入在標題列（第 1 列）正下方，日期新的一直往上疊，最新一批永遠在最上面，
+    並把這批（今天）的範圍整個上色，跟這個分頁上一批（前一個記錄的日子）的顏色不同。"""
     if not rows:
         return 0
     import gspread
+    fill_color = next_fill_color(sh, title)
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
@@ -101,6 +132,9 @@ def insert_rows_top(sh, title, rows):
         ws.append_row(SHEET_HEADERS[title])
     # 全部轉成字串：數字欄位混著理由這種長文字，讓試算表用字串顯示最不會出錯（要算的話自己在表上轉）
     ws.insert_rows([[str(v) for v in row] for row in rows], row=2, value_input_option="USER_ENTERED")
+    last_row = 1 + len(rows)
+    rng = f"{gspread.utils.rowcol_to_a1(2, 1)}:{gspread.utils.rowcol_to_a1(last_row, len(SHEET_HEADERS[title]))}"
+    ws.format(rng, {"backgroundColor": fill_color})
     return len(rows)
 
 

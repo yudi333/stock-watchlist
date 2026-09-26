@@ -94,7 +94,10 @@ def insert_rows_top(sh, title, rows):
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=1, cols=len(SHEET_HEADERS[title]))
+        # rows 不能給 1：insert_rows 是「插入在第 2 列」，如果整張表格只有 1 列（剛好等於
+        # 標題列），插入位置就已經超出格線範圍，Google 那邊會回 400 錯誤。給一般試算表
+        # 常見的預設大小 1000，之後累積再多年的資料也還早才會用完。
+        ws = sh.add_worksheet(title=title, rows=1000, cols=len(SHEET_HEADERS[title]))
         ws.append_row(SHEET_HEADERS[title])
     # 全部轉成字串：數字欄位混著理由這種長文字，讓試算表用字串顯示最不會出錯（要算的話自己在表上轉）
     ws.insert_rows([[str(v) for v in row] for row in rows], row=2, value_input_option="USER_ENTERED")

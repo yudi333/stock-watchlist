@@ -55,14 +55,31 @@ jobs:
         with:
           path: .sheet-logged
           key: sheet-logged-${{ steps.sheet_date.outputs.date }}
+      - name: 檢查今天是否已經回測過
+        # 跟上面記錄用的是不同的快取標記，故意分開：回測失敗不該連累記錄（不然重跑會插入
+        # 重複的當天資料），記錄失敗也不該連累回測（回測本來就是查以前記過的舊資料，跟今天
+        # 有沒有記錄成功是兩回事）。這個步驟要放在下面「安裝套件」之前，不然它的
+        # cache-hit 結果還沒產生，下面引用就會拿到空值。
+        id: backtest_logged
+        uses: actions/cache@v4
+        with:
+          path: .backtest-logged
+          key: backtest-logged-${{ steps.sheet_date.outputs.date }}
       - run: pip install gspread google-auth   # 只有平常用不到，需要時才裝，維持其他步驟的安裝速度
-        if: steps.sheet_logged.outputs.cache-hit != 'true'
+        if: steps.sheet_logged.outputs.cache-hit != 'true' || steps.backtest_logged.outputs.cache-hit != 'true'
       - name: 記錄到 Google 試算表
         # 標記要等 sheets_log.py 真的成功（回傳 0）才寫，順序很重要：先寫標記再執行的話，
         # 失敗了也會被當成「今天記過了」，之後同一天不會再重試，之前就是這樣才卡住的。
         if: steps.sheet_logged.outputs.cache-hit != 'true'
         run: python sheets_log.py && (mkdir -p .sheet-logged && date > .sheet-logged/done)
         continue-on-error: true   # 沒設定或寫入失敗都不該讓網頁發布跟著失敗
+        env:
+          GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
+          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+      - name: 回測（檢查以前記錄過的候選股後來有沒有觸發停損停利）
+        if: steps.backtest_logged.outputs.cache-hit != 'true'
+        run: python backtest.py && (mkdir -p .backtest-logged && date > .backtest-logged/done)
+        continue-on-error: true   # 沒設定或回測失敗都不該讓網頁發布跟著失敗
         env:
           GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}

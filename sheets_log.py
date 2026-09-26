@@ -92,6 +92,9 @@ def append_rows(sh, title, rows):
 
 
 def main():
+    # 回傳值特別分開：0 只代表「不用記（沒設定）或真的記成功了」，1 代表「有設定但失敗了」。
+    # daily.yml 是看這個回傳值決定要不要把「今天已記錄」的標記寫進快取——失敗的話回傳 1，
+    # 不寫標記，今天稍後的執行才會再重試；不然標記一旦寫下去，今天就再也不會重試了。
     try:
         sh = connect()
     except Exception as e:
@@ -100,9 +103,9 @@ def main():
         # 的執行紀錄裡直接看到是哪一行、哪個函式庫丟出來的
         print(f"[注意] 連線 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。完整錯誤：")
         traceback.print_exc()
-        return 0   # 不該讓網頁發布跟著失敗
+        return 1
     if sh is None:
-        return 0
+        return 0   # 沒設定 GOOGLE_SHEETS_KEY/ID，本來就不用記，不算失敗
 
     try:
         stocks = json.loads((BASE_DIR / "stocks.json").read_text(encoding="utf-8"))["stocks"]
@@ -117,6 +120,7 @@ def main():
     except Exception as e:
         print(f"[注意] 寫入 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。完整錯誤：")
         traceback.print_exc()
+        return 1
     return 0
 
 

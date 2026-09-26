@@ -1,6 +1,8 @@
 """
 把每天分析出來的「多重訊號／每日候選／每週候選」記錄到 Google 試算表，逐日累積成歷史紀錄
-（不會覆蓋前一天，每天執行都是新增一批列）。只做記錄，不會下單，也不影響網頁本身。
+（不會覆蓋前一天，每天執行都是插入新的一批列，最新日期永遠插在標題列正下方、日期新的在上面）。
+欄位盡量拆成數字（買進區間、停損、停利、風險%、報酬%、賺賠比都是獨立欄位），方便之後拿來
+回測——用公式篩同一代號、比對訊號出現後的實際走勢。只做記錄，不會下單，也不影響網頁本身。
 
 用法（在 GitHub Actions 裡自動執行，一天只跑一次，見 daily.yml 的說明）：
   python sheets_log.py
@@ -19,6 +21,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from build_site import POS_SHORT   # {"in":"區間內","above":"高於區間","below":"低於區間"}，跟網頁共用同一份對照表
+
 BASE_DIR = Path(__file__).parent
 
 # 每日／每週候選的分頁欄位：直接對應 candidates_*.csv 的欄位，只是把「資料日期」搬到最前面
@@ -27,8 +31,13 @@ CANDIDATE_COLS = ["代號", "名稱", "型態", "側別", "收盤", "買進下�
                   "停損價", "停利價", "風險%", "報酬%", "賺賠比", "RSI", "量比", "距52週高%",
                   "理由", "Yahoo代號"]
 
+# 多重訊號分頁：拆成「一檔股票、一個符合的訊號」一列（不是一檔股票塞一整包文字），
+# 買進區間／停損／停利／風險％／報酬％／賺賠比都是獨立的數字欄位，格式盡量對齊每日／每週候選，
+# 方便之後回測——例如可以直接用公式篩「同一代號」比較多次出現的訊號、拿收盤價序列回頭比對
+# 買進區間有沒有觸及、停損/停利哪個先發生。
 SHEET_HEADERS = {
-    "多重訊號": ["日期", "代號", "名稱", "收盤", "漲跌%", "符合訊號數", "訊號內容"],
+    "多重訊號": ["日期", "代號", "名稱", "收盤", "漲跌%", "符合訊號數", "訊號", "時間框",
+               "現價位置", "買進下限", "買進上限", "停損價", "停利價", "風險%", "報酬%", "賺賠比"],
     "每日候選": ["日期"] + CANDIDATE_COLS,
     "每週候選": ["日期"] + CANDIDATE_COLS,
 }
@@ -36,17 +45,17 @@ SHEET_HEADERS = {
 
 def multi_signal_rows(stocks):
     """算法跟 build_site.py 的 multi_signal_html()／notify.py 一致：同時符合 2 個（含）以上
-    不同種類的右側買進訊號，且沒有「過熱，不追」（那種不列入「可買進」）。"""
+    不同種類的右側買進訊號，且沒有「過熱，不追」（那種不列入「可買進」）；一個訊號一列。"""
     rows = []
     for s in stocks:
         right = [g for g in s["sigs"] if g["side"] == "右側"]
         kinds = {g["name"] for g in right}
         if len(kinds) < 2 or "過熱，不追" in s["tags"]:
             continue
-        detail = "；".join(
-            f"{g['name']}（{g['tf']}）買 {g['lo']:.2f}～{g['hi']:.2f} 停損 {g['stop']:.2f} 停利 {g['target']:.2f}"
-            for g in right)
-        rows.append([s["date"], s["code"], s["name"], s["close"], s["chg"], len(kinds), detail])
+        for g in right:
+            rows.append([s["date"], s["code"], s["name"], s["close"], s["chg"], len(kinds),
+                         g["name"], g["tf"], POS_SHORT.get(g["pos"], g["pos"]), g["lo"], g["hi"],
+                         g["stop"], g["target"], g["risk"], g["gain"], g["rr"]])
     return rows
 
 
@@ -77,7 +86,8 @@ def connect():
     return gspread.authorize(creds).open_by_key(sheet_id)
 
 
-def append_rows(sh, title, rows):
+def insert_rows_top(sh, title, rows):
+    """插入在標題列（第 1 列）正下方，日期新的一直往上疊，最新一批永遠在最上面。"""
     if not rows:
         return 0
     import gspread
@@ -87,7 +97,7 @@ def append_rows(sh, title, rows):
         ws = sh.add_worksheet(title=title, rows=1, cols=len(SHEET_HEADERS[title]))
         ws.append_row(SHEET_HEADERS[title])
     # 全部轉成字串：數字欄位混著理由這種長文字，讓試算表用字串顯示最不會出錯（要算的話自己在表上轉）
-    ws.append_rows([[str(v) for v in row] for row in rows], value_input_option="USER_ENTERED")
+    ws.insert_rows([[str(v) for v in row] for row in rows], row=2, value_input_option="USER_ENTERED")
     return len(rows)
 
 
@@ -113,9 +123,9 @@ def main():
         stocks = []
 
     try:
-        n1 = append_rows(sh, "多重訊號", multi_signal_rows(stocks))
-        n2 = append_rows(sh, "每日候選", candidates_rows("candidates_daily.csv"))
-        n3 = append_rows(sh, "每週候選", candidates_rows("candidates_weekly.csv"))
+        n1 = insert_rows_top(sh, "多重訊號", multi_signal_rows(stocks))
+        n2 = insert_rows_top(sh, "每日候選", candidates_rows("candidates_daily.csv"))
+        n3 = insert_rows_top(sh, "每週候選", candidates_rows("candidates_weekly.csv"))
         print(f"已記錄到 Google 試算表：多重訊號 {n1} 列、每日候選 {n2} 列、每週候選 {n3} 列")
     except Exception as e:
         print(f"[注意] 寫入 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。完整錯誤：")

@@ -1,10 +1,12 @@
 """
 把每天分析出來的「多重訊號／每日候選／每週候選」記錄到 Google 試算表，逐日累積成歷史紀錄
-（不會覆蓋前一天，每天執行都是插入新的一批列，最新日期永遠插在標題列正下方、日期新的在上面）。
+（不會覆蓋前一天，每天新的一批插在標題列正下方、日期新的在上面）。daily-update 一天會跑
+3 次，同一天如果重複執行，會把當天稍早記錄的那一批刪掉、換成這次（更新）的結果，讓試算表
+跟網站顯示的內容一致，不是維持當天第一次、可能已經過時的那份。
 欄位盡量拆成數字（買進區間、停損、停利、風險%、報酬%、賺賠比都是獨立欄位），方便之後拿來
 回測——用公式篩同一代號、比對訊號出現後的實際走勢。只做記錄，不會下單，也不影響網頁本身。
 
-用法（在 GitHub Actions 裡自動執行，一天只跑一次，見 daily.yml 的說明）：
+用法（在 GitHub Actions 裡自動執行，daily-update 每次跑都會執行，見 daily.yml 的說明）：
   python sheets_log.py
 
 需要兩個環境變數（在 GitHub repo 的 Settings > Secrets 設定，不要寫進程式）：
@@ -93,35 +95,57 @@ FILL_GRAY = {"red": 217 / 255, "green": 217 / 255, "blue": 217 / 255}
 META_SHEET = "_設定"      # 記著「每個分頁上次用了哪個顏色」的隱藏用分頁，不是資料
 
 
-def next_fill_color(sh, title):
-    """跟這個分頁上次記錄的顏色相反：讀 _設定 分頁記著的上次顏色，這次換另一種，並把新的
-    存回去。三個分頁（多重訊號／每日候選／每週候選）分開各記各的——不能共用同一個顏色狀態，
-    不然某天剛好某個分頁沒有候選股（0 列，沒真的插入），沒資料卻也算跳過一輪顏色，會害那個
-    分頁下一次真正有資料時顏色接不起來（跟它自己前一批緊鄰卻同色）。用分頁名稱找 _設定裡
-    對應的那一列，找不到就當作還沒記錄過、從白色開始。"""
+def _color_for(name):
+    return FILL_GRAY if name == "gray" else FILL_WHITE
+
+
+def _meta_ws(sh):
     import gspread
     try:
-        meta = sh.worksheet(META_SHEET)
+        return sh.worksheet(META_SHEET)
     except gspread.WorksheetNotFound:
         meta = sh.add_worksheet(title=META_SHEET, rows=10, cols=2)
         meta.append_row(["分頁", "上次記錄用的底色（不要刪除這個分頁）"])
+        return meta
+
+
+def current_fill_color(sh, title):
+    """讀這個分頁目前記著、正在使用中的顏色，不會去改它——同一天內重複寫入（一天跑 3 次，
+    把今天那批刪掉重寫成最新結果，見 sync_rows_top）用的還是同一個顏色，不算真的換了一天。
+    找不到紀錄就當白色。"""
+    meta = _meta_ws(sh)
     cell = meta.find(title, in_column=1)   # 找不到會回傳 None（不是丟例外）
     last = meta.cell(cell.row, 2).value if cell else None
-    this_time, next_time = (FILL_GRAY, "gray") if last == "white" else (FILL_WHITE, "white")
+    return _color_for(last)
+
+
+def next_fill_color(sh, title):
+    """跟這個分頁上次記錄的顏色相反，並把新的存回去——只有真的換了新的一天才呼叫這個。
+    三個分頁（多重訊號／每日候選／每週候選）分開各記各的——不能共用同一個顏色狀態，不然
+    某天剛好某個分頁沒有候選股（0 列，沒真的插入），沒資料卻也算跳過一輪顏色，會害那個
+    分頁下一次真正有資料時顏色接不起來（跟它自己前一批緊鄰卻同色）。"""
+    meta = _meta_ws(sh)
+    cell = meta.find(title, in_column=1)
+    last = meta.cell(cell.row, 2).value if cell else None
+    this_name = "white" if last != "white" else "gray"
     if cell:
-        meta.update_cell(cell.row, 2, next_time)
+        meta.update_cell(cell.row, 2, this_name)
     else:
-        meta.append_row([title, next_time])
-    return this_time
+        meta.append_row([title, this_name])
+    return _color_for(this_name)
 
 
-def insert_rows_top(sh, title, rows):
-    """插入在標題列（第 1 列）正下方，日期新的一直往上疊，最新一批永遠在最上面，
-    並把這批（今天）的範圍整個上色，跟這個分頁上一批（前一個記錄的日子）的顏色不同。"""
+def sync_rows_top(sh, title, rows):
+    """插入在標題列（第 1 列）正下方，日期新的一直往上疊，最新一批永遠在最上面。
+
+    daily-update 一天會跑 3 次（15:07/16:10/18:00），如果那天 Yahoo 資料中途有修正，
+    3 次分析出來的候選股可能不一樣——網站顯示的永遠是「最後一次」的結果，所以試算表
+    也要跟著看齊：如果最上面那一批的日期就是今天，代表今天稍早已經記過一次了，先把那
+    一批刪掉，再插入這次（更新、更完整）的結果，而不是维持當天第一次跑到、可能已經過時
+    的那份。真的是新的一天才會換交錯的底色；同一天內重寫不算換了一天，顏色不變。"""
     if not rows:
         return 0
     import gspread
-    fill_color = next_fill_color(sh, title)
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
@@ -130,6 +154,21 @@ def insert_rows_top(sh, title, rows):
         # 常見的預設大小 1000，之後累積再多年的資料也還早才會用完。
         ws = sh.add_worksheet(title=title, rows=1000, cols=len(SHEET_HEADERS[title]))
         ws.append_row(SHEET_HEADERS[title])
+
+    today = rows[0][0]   # 這批資料的日期（每列第一欄），假設同一批都是同一天
+    existing = ws.get_all_values()
+    same_day_count = 0
+    for r in existing[1:]:
+        if r and r[0] == today:
+            same_day_count += 1
+        else:
+            break
+    if same_day_count:
+        fill_color = current_fill_color(sh, title)   # 沿用今天稍早已經決定的顏色，不要再換
+        ws.delete_rows(2, 1 + same_day_count)
+    else:
+        fill_color = next_fill_color(sh, title)      # 真的是新的一天，才换顏色
+
     # 全部轉成字串：數字欄位混著理由這種長文字，讓試算表用字串顯示最不會出錯（要算的話自己在表上轉）
     ws.insert_rows([[str(v) for v in row] for row in rows], row=2, value_input_option="USER_ENTERED")
     last_row = 1 + len(rows)
@@ -139,9 +178,9 @@ def insert_rows_top(sh, title, rows):
 
 
 def main():
-    # 回傳值特別分開：0 只代表「不用記（沒設定）或真的記成功了」，1 代表「有設定但失敗了」。
-    # daily.yml 是看這個回傳值決定要不要把「今天已記錄」的標記寫進快取——失敗的話回傳 1，
-    # 不寫標記，今天稍後的執行才會再重試；不然標記一旦寫下去，今天就再也不會重試了。
+    # 回傳值：0 代表「不用記（沒設定）或真的記成功了」，1 代表「有設定但失敗了」——單純讓
+    # Actions 執行紀錄裡看得出這個步驟是真的成功還是失敗（daily.yml 有 continue-on-error，
+    # 這裡失敗不會讓網頁發布跟著失敗，但步驟本身會標紅方便你發現）。
     try:
         sh = connect()
     except Exception as e:
@@ -160,9 +199,9 @@ def main():
         stocks = []
 
     try:
-        n1 = insert_rows_top(sh, "多重訊號", multi_signal_rows(stocks))
-        n2 = insert_rows_top(sh, "每日候選", candidates_rows("candidates_daily.csv"))
-        n3 = insert_rows_top(sh, "每週候選", candidates_rows("candidates_weekly.csv"))
+        n1 = sync_rows_top(sh, "多重訊號", multi_signal_rows(stocks))
+        n2 = sync_rows_top(sh, "每日候選", candidates_rows("candidates_daily.csv"))
+        n3 = sync_rows_top(sh, "每週候選", candidates_rows("candidates_weekly.csv"))
         print(f"已記錄到 Google 試算表：多重訊號 {n1} 列、每日候選 {n2} 列、每週候選 {n3} 列")
     except Exception as e:
         print(f"[注意] 寫入 Google 試算表失敗（{type(e).__name__}：{e}），略過這次記錄。完整錯誤：")

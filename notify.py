@@ -1,9 +1,15 @@
 """
 更新完成後的 Telegram 通知。只做通知，不會下單。
 
+一天不是發好幾則，是**一天只留一則、內容更新成最新一次的結果**：daily-update 一天跑
+3 次，同一天內第二、三次執行不會再發新訊息，而是編輯（edit）當天第一次發的那一則，換成
+這次的最新內容——避免手機上塞滿好幾則同一天的重複通知，也讓看到的永遠是最後一次（資料
+最完整）的結果，跟網站、Google 試算表現在的邏輯一致。是不是要編輯舊訊息，由呼叫端
+（daily.yml）透過 TG_EDIT_ID 這個環境變數告訴這支程式；這支程式本身不記狀態。
+
 用法（在 GitHub Actions 裡自動執行）：
   python notify.py make                      # 依今天的分析結果產生 message.txt
-  python notify.py send <build結果> <deploy結果>  # 傳送到 Telegram（成功傳摘要、失敗傳警告）
+  python notify.py send <build結果> <deploy結果>  # 傳送或編輯 Telegram 訊息（成功傳摘要、失敗傳警告）
 
 需要兩個環境變數（在 GitHub repo 的 Settings > Secrets 設定，不要寫進程式）：
   TG_BOT_TOKEN   BotFather 給的機器人 token
@@ -19,6 +25,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 MESSAGE_FILE = BASE_DIR / "message.txt"
+MESSAGE_ID_FILE = BASE_DIR / ".tg-message-id" / "id"
 
 
 def read_csv(name):
@@ -92,22 +99,39 @@ def make_message():
     return "\n".join(lines)
 
 
-def send(text):
+def send(text, edit_id=None):
+    """傳送或編輯今天的 Telegram 通知。edit_id 有值就先試著編輯那則舊訊息（同一天內把內容
+    換成最新結果，不多發一則）；沒有 edit_id，或編輯失敗（例如舊訊息已經被手動刪除），就
+    改發一則新的。回傳這次用到的 message_id（給下次同一天執行時繼續編輯用），完全沒送出
+    （沒設定 token 或送出失敗）回傳 None。"""
     token, chat = os.environ.get("TG_BOT_TOKEN"), os.environ.get("TG_CHAT_ID")
     if not token or not chat:
         print("沒有設定 TG_BOT_TOKEN / TG_CHAT_ID，略過 Telegram 通知。")
-        return 0
+        return None
     import requests
+    base = f"https://api.telegram.org/bot{token}"
+    if edit_id:
+        try:
+            r = requests.post(f"{base}/editMessageText",
+                              json={"chat_id": chat, "message_id": edit_id, "text": text[:4000],
+                                    "disable_web_page_preview": True},
+                              timeout=30)
+            r.raise_for_status()
+            print("已把今天稍早那則 Telegram 通知更新成最新結果。")
+            return edit_id
+        except Exception as e:
+            print(f"編輯今天稍早那則訊息失敗（{type(e).__name__}），改發一則新的。")
     try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+        r = requests.post(f"{base}/sendMessage",
                           json={"chat_id": chat, "text": text[:4000], "disable_web_page_preview": True},
                           timeout=30)
         r.raise_for_status()
         print("已傳送 Telegram 通知。")
+        return r.json()["result"]["message_id"]
     except Exception as e:
         # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
         print(f"Telegram 傳送失敗（{type(e).__name__}），請檢查 token 與 chat id。")
-    return 0                                # 通知失敗不該讓整個更新流程失敗
+        return None
 
 
 def main():
@@ -119,10 +143,17 @@ def main():
     if cmd == "send":
         build, deploy = (sys.argv[2:4] + ["", ""])[:2]
         run_url = os.environ.get("RUN_URL", "")
+        edit_id = os.environ.get("TG_EDIT_ID") or None
         if build == "success" and deploy == "success" and MESSAGE_FILE.exists():
-            return send(MESSAGE_FILE.read_text(encoding="utf-8"))
-        return send(f"DiStocks 更新失敗（分析：{build}，發布：{deploy}）\n"
+            text = MESSAGE_FILE.read_text(encoding="utf-8")
+        else:
+            text = (f"DiStocks 更新失敗（分析：{build}，發布：{deploy}）\n"
                     f"網頁還是上一次的內容。請查看：{run_url}")
+        mid = send(text, edit_id)
+        if mid:   # 存下來給同一天後面的執行編輯用；沒送出成功就不寫，維持原本（如果有的話）的 id
+            MESSAGE_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+            MESSAGE_ID_FILE.write_text(str(mid), encoding="utf-8")
+        return 0
     print(__doc__)
     return 1
 

@@ -1,20 +1,23 @@
-# 盤中（週一到週五台灣時間約 9:12～13:42，每 30 分鐘）只更新報價，給「我的持股」檢查移動停損用。
+# 盤中（週一到週五台灣時間約 9:00～13:45，每 15 分鐘）只更新報價，給「我的持股」檢查移動停損用。
 #
 # 跟 daily.yml（每天兩次的完整技術分析）分開：這裡只抓「現在價格」，不重算均線、RSI、
 # 訊號等，跑得快也影響範圍小；就算失敗，網頁的其他部分不受影響，持股只是暫時看不到
 # 盤中價格、退回顯示前一個交易日收盤。
 #
+# 排程不是用 GitHub 自己的 schedule（原因跟 daily.yml 一樣：常常延遲或整個被跳過），
+# 改用外部的 cron-job.org 定時呼叫 workflow_dispatch 觸發，crontab 是
+# `*/15 9-13 * * 1-5`（台灣時區）。這裡只留 workflow_dispatch，要改執行時間到
+# cron-job.org 網站上改，不用動這個檔案。
+#
 # 做法：把目前已發布的網頁檔案抓下來（避免蓋掉），只加上/更新 quotes.json，再重新發布。
 name: intraday-quotes
 
 on:
-  schedule:
-    - cron: "12,42 1-5 * * 1-5"   # 台灣時間約 9:12 ~ 13:42，每 30 分鐘（收盤 13:30，最後一次抓到收盤價）
-  workflow_dispatch:
+  workflow_dispatch:   # cron-job.org 定時呼叫這個；也可以自己到 GitHub 網頁上手動按「Run workflow」
 
 concurrency:
-  group: pages   # 跟 daily.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
-  cancel-in-progress: false
+  group: pages   # 跟 daily.yml、night-futures.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
+  cancel-in-progress: true   # 新的排程來了就直接取消還卡著的舊執行，不要一直排隊等（見 daily.yml 的說明）
 
 permissions:
   contents: read
@@ -24,6 +27,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # 正常幾十秒內會跑完，上限抓寬一點；真的卡住就讓它失敗，不要無限等
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,6 +51,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

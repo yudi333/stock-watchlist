@@ -19,8 +19,12 @@ on:
   workflow_dispatch:   # cron-job.org 定時呼叫這個；也可以自己到 GitHub 網頁上手動按「Run workflow」
 
 concurrency:
-  group: pages   # 跟 intraday-quotes.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
-  cancel-in-progress: false
+  group: pages   # 跟 intraday-quotes.yml、night-futures.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
+  # 原本是 false（捲到後面排隊，不會插隊）：結果某次 intraday-quotes 卡在 pending 一直沒結束
+  # （疑似 GitHub 那邊的問題），把同一群組的 daily-update 整個堵住，一連好幾次排程都被取消、
+  # 網頁好幾天沒更新。改成 true：新的排程一來，直接取消還卡著的舊執行，不要一直等——
+  # 正常情況下三支 workflow 的排程時間本來就不重疊，不會因此誤殺真的在跑的工作。
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -30,6 +34,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20   # 正常幾分鐘內會跑完，上限抓寬一點；真的卡住就讓它失敗，不要無限等
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -87,6 +92,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -97,6 +103,7 @@ jobs:
   notify:
     needs: [build, deploy]
     if: always()   # build 或 deploy 失敗也要通知，不然你只會看到網頁沒更新、不知道為什麼
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: 算出今天的日期（台灣時間）

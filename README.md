@@ -177,8 +177,9 @@ python build_site.py    # 產生 site/index.html（網頁）
 
 只給「我的持股」用，觀察清單和候選股不受影響、維持每天更新。
 
-`.github/workflows/intraday-quotes.yml` 在週一到週五**台灣時間約 9:12～13:42、每 30 分鐘**跑一次
-[quotes.py](quotes.py)，兩層來源：
+`.github/workflows/intraday-quotes.yml` 在週一到週五**台灣時間約 9:00～13:45、每 15 分鐘**跑一次
+[quotes.py](quotes.py)（排程方式跟下面「網頁功能」提到的 `daily.yml` 一樣，用 cron-job.org
+觸發，不是 GitHub 自己的 schedule），兩層來源：
 
 1. **優先：鉅亨網（cnyes）的報價介面** —— 一次可查 250 檔、上市上櫃格式相同，全市場約 5 秒。
 2. **失敗才用：Yahoo 的分鐘線** —— 日線在盤中的「今天」收盤價是空的（見下方說明），要改抓
@@ -191,7 +192,7 @@ python build_site.py    # 產生 site/index.html（網頁）
 **要注意**：這兩個都是**沒有正式文件的內部介面**，不是官方公開給外部程式用的 API，也沒有深入
 確認過使用條款，純粹是實測「抓得到、格式對得起來」。哪天其中一個改版、限流或擋掉，
 `intraday-quotes.yml` 的執行會失敗（`continue-on-error`，不影響其他部分），持股只是暫時看不到
-盤中價格、退回收盤價，不會影響觀察清單、候選股或整個網站。想調整頻率就改這個檔案裡的 `cron`。
+盤中價格、退回收盤價，不會影響觀察清單、候選股或整個網站。想調整頻率到 cron-job.org 網站上改。
 
 ## 登入與雲端帳號（Firebase）
 

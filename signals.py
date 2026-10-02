@@ -306,18 +306,23 @@ def sig16_mirror(x):
         return _sig("訊號16 鏡射突破前高", "右側", brk_zone(prior_high), prior_high, prior_high * (1 + amp),
                     f"創 {N}{p['unit']}新高 {prior_high:.2f}（量 {x.vol_ratio:.1f} 倍）",
                     zone_note=ZN_BREAK)
-    # 突破後拉回：現價約在高點 ×0.85~0.93，且沒跌破原本的前高（防守）
+    # 突破後拉回：現價約在高點 ×0.85~0.93，且沒跌破原本的前高（防守），拉回期間要量縮——
+    # 理論上健康的拉回是主力洗盤、沒有出貨，量會明顯萎縮；如果拉回時量還是跟上漲期一樣大
+    # （甚至更大），比較可能是真的在出貨、不是洗盤，不該當作拉回買點
     win = x.h[-M:]
     pk = int(np.argmax(win))
     peak = win[pk]
     old_high = x.h[-1 - N - M:-M].max()
     start2 = x.l[-1 - N - M:-M].min()
+    rally_vol = x.v[-1 - N - M:-M + pk].mean()     # 起漲到高點（上漲期）的平均量
+    pull_vol = x.v[-M + pk:].mean()                # 高點到現在（拉回期）的平均量
     if peak > old_high and pk < M - 3 and 0.83 <= c / peak <= 0.93 \
-            and c >= old_high * 0.98 and c > x.c[-2]:
+            and c >= old_high * 0.98 and c > x.c[-2] and pull_vol < rally_vol * 0.85:
         pull_low = x.l[-M + pk:].min()
         amp = (peak - start2) / start2
         return _sig("訊號16 鏡射拉回", "右側", (peak * 0.85, peak * 0.90), min(pull_low, old_high), pull_low * (1 + amp),
-                    f"突破 {old_high:.2f} 後拉回到高點的 {c / peak * 100:.0f}%，止穩未破防守",
+                    f"突破 {old_high:.2f} 後拉回到高點的 {c / peak * 100:.0f}%，量縮至上漲期的 "
+                    f"{pull_vol / rally_vol * 100:.0f}%，止穩未破防守",
                     zone_note="高點 ×0.85～×0.90，拉回可買點")
     return None
 

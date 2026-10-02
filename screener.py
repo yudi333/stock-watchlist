@@ -13,7 +13,6 @@ import json
 import math
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -74,37 +73,89 @@ FALLBACK = {
 }
 
 
-def fetch_market(url, code_key, name_key, value_key, volume_key, price_key, suffix):
-    """抓一個交易所的當日行情，回傳 [(代號, 名稱, 後綴, 成交金額, 成交量, 收盤價)]。"""
-    r = requests.get(url, headers=HEADERS, timeout=30)
+def fetch_twse_quotes(days_back=5):
+    """上市個股的官方每日收盤行情：(資料日期, {代號: {name, value, volume, price, open, high, low}})。
+    用跟大盤指數（fetch_taiex_latest()）同一套查詢介面 MI_INDEX，不是 STOCK_DAY_ALL 那個
+    OpenAPI——實測 STOCK_DAY_ALL 收盤後要將近一整天才會更新（當天查都還是前一天的資料，拿來
+    校正 Yahoo 反而會用舊資料蓋掉 Yahoo 已經比較新的），但 MI_INDEX 收盤後很快就有今天的。
+    從今天往回試，找不到（假日、還沒收盤）就試前一天，最多試 days_back 天；都找不到回傳
+    (None, {})。"""
+    now = datetime.now(timezone(timedelta(hours=8)))
+    for i in range(days_back):
+        day = now - timedelta(days=i)
+        if day.weekday() >= 5:            # 週六日不開盤，不用查
+            continue
+        ymd = day.strftime("%Y%m%d")
+        try:
+            r = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+                             params={"response": "json", "date": ymd, "type": "ALLBUT0999"},
+                             headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("stat") != "OK":
+                continue
+            table = next((t for t in data.get("tables", [])
+                          if "每日收盤行情" in (t.get("title") or "")), None)
+            if not table or not table.get("data"):
+                continue
+            # 欄位順序：證券代號,證券名稱,成交股數,成交筆數,成交金額,開盤價,最高價,最低價,收盤價,...
+            quotes = {row[0].strip(): dict(name=row[1].strip(), volume=to_float(row[2]), value=to_float(row[4]),
+                                            open=to_float(row[5]), high=to_float(row[6]), low=to_float(row[7]),
+                                            price=to_float(row[8]))
+                      for row in table["data"]}
+            return f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}", quotes
+        except Exception:
+            continue                      # 這天查詢失敗，試前一天
+    return None, {}
+
+
+def fetch_tpex_quotes():
+    """上櫃個股的官方每日收盤行情：(資料日期, {代號: {...}})。這個 OpenAPI 本身就是當天即時的
+    （不像上市的 STOCK_DAY_ALL 那樣會delay 將近一天），不用像 fetch_twse_quotes() 那樣往回試。"""
+    r = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+                     headers=HEADERS, timeout=30)
     r.raise_for_status()
-    return [(d[code_key], d[name_key], suffix, to_float(d[value_key]), to_float(d[volume_key]), to_float(d[price_key]))
-            for d in r.json()]
+    rows = r.json()
+    if not rows:
+        return None, {}
+    roc = rows[0]["Date"]                 # 民國年，例如 "1151002"
+    date = f"{int(roc[:3]) + 1911}-{roc[3:5]}-{roc[5:]}"
+    quotes = {d["SecuritiesCompanyCode"]: dict(
+        name=d["CompanyName"], value=to_float(d["TransactionAmount"]), volume=to_float(d["TradingShares"]),
+        price=to_float(d["Close"]), open=to_float(d["Open"]), high=to_float(d["High"]), low=to_float(d["Low"]))
+        for d in rows}
+    return date, quotes
 
 
 def get_universe():
-    """回傳所有個股＋ETF（上市 + 上櫃）：[{code, name, sym, mkt, value, volume, price}]。
+    """回傳所有個股＋ETF（上市 + 上櫃）：[{code, name, sym, mkt, value, volume, price, open, high, low, date}]。
     value=成交金額、volume=成交量（股數）——候選股同時看這兩個排名（見 main() 的 UNIVERSE_SIZE / VOLUME_SIZE），
-    因為有些股票單價低、成交量很大，但成交金額排不進金額榜，只看金額會漏掉。"""
+    因為有些股票單價低、成交量很大，但成交金額排不進金額榜，只看金額會漏掉。
+    price/open/high/low 是證交所／櫃買中心官方公告的「今天」數字，以官方為準、Yahoo 為輔
+    （見 apply_official_ohlcv()）：官方資料收盤後很快就定案，Yahoo 偶爾還要再等一段時間才穩定。
+    date 是這筆官方資料實際對應的交易日——上市、上櫃是兩個不同系統，更新快慢可能不一樣，
+    不能假設兩邊「今天」都已經更新到位，各自記自己實際拿到的日期才準。"""
     items = []
-    sources = [
-        ("上市", "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-         "Code", "Name", "TradeValue", "TradeVolume", "ClosingPrice", ".TW", "TWSE"),
-        ("上櫃", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-         "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "TradingShares", "Close", ".TWO", "TPEX"),
-    ]
-    for label, url, ck, nk, vk, volk, pk, suffix, mkt in sources:
+    sources = [("上市", fetch_twse_quotes, ".TW", "TWSE"), ("上櫃", fetch_tpex_quotes, ".TWO", "TPEX")]
+    for label, fetch, suffix, mkt in sources:
         try:
-            for c, n, _, v, vol, pr in fetch_market(url, ck, nk, vk, volk, pk, suffix):
+            date, quotes = fetch()
+            if not quotes:
+                print(f"[注意] 抓不到{label}官方行情。")
+                continue
+            for code, q in quotes.items():
                 # 一般個股：4 碼、不是 0 開頭；ETF：0 開頭，2~4 碼數字，槓桿/反向的最後可能多一個
                 # 英文字母（00631L、00632R 這種）。權證、特別股等其他代號格式都不留。
-                if re.fullmatch(r"[1-9]\d{3}|00\d{2,4}[A-Z]?", c):
-                    items.append(dict(code=c, name=n, sym=c + suffix, mkt=mkt, value=v, volume=vol, price=pr))
+                if re.fullmatch(r"[1-9]\d{3}|00\d{2,4}[A-Z]?", code):
+                    items.append(dict(code=code, name=q["name"], sym=code + suffix, mkt=mkt,
+                                       value=q["value"], volume=q["volume"], price=q["price"],
+                                       open=q["open"], high=q["high"], low=q["low"], date=date))
         except Exception as e:  # 其中一邊失敗，不影響另一邊
             print(f"[注意] 抓不到{label}行情：{e}")
     if not items:
         print("[注意] 官方行情都抓不到，改掃內建的大型權值股清單。")
-        items = [dict(code=c, name=n, sym=c + ".TW", mkt="TWSE", value=1e12 - i, volume=1e12 - i, price=999)
+        items = [dict(code=c, name=n, sym=c + ".TW", mkt="TWSE", value=1e12 - i, volume=1e12 - i,
+                      price=999, open=999, high=999, low=999, date=None)
                  for i, (c, n) in enumerate(FALLBACK.items())]
     return items
 
@@ -413,48 +464,37 @@ def analyze_stock(item, df, inst_notes=None):
     return rec, rd, rw, date
 
 
-def repair_missing_close(data, part):
-    """Yahoo 批次下載偶爾會漏掉「最後一天」的收盤價（開高低量都正常，唯獨收盤是空的，
-    之後也不一定會補），但那個時間點 Yahoo 網頁上其實已經有正確的收盤價，藏在
-    fast_info 的 lastPrice（跟批次下載走不同的 API）。缺漏才補查，多執行緒加速，
-    不影響平常（沒缺漏）的速度；查不到就維持缺漏，照原本邏輯退回用前一天的資料。"""
-    missing = [s for s in part if not data[s["sym"]].empty and pd.isna(data[s["sym"]]["Close"].iloc[-1])]
-    if not missing:
-        return
-    def fetch_one(s):
-        try:
-            return s["sym"], yf.Ticker(s["sym"]).fast_info["lastPrice"]
-        except Exception:
-            return s["sym"], None
-    fixed = 0
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        for sym, price in ex.map(fetch_one, missing):
-            if price is not None and not pd.isna(price):
-                # data[sym] 是分組後的切片，改它不會寫回原本的 data（pandas 的 copy-on-write）；
-                # 要用完整的 MultiIndex 欄位鍵直接改 data 本身才會真的生效
-                last = data.index[-1]
-                data.loc[last, (sym, "Close")] = price
-                # 交易很冷清、當天完全沒成交的股票，連開高低量都是空的（不是只缺收盤）；
-                # 高低價沒有真實數字可用，就用補回的收盤價當高低價（等於「一天沒有波動」），
-                # 成交量補 0，這樣後面算漲跌停/量比才不會因為 NaN 而整檔壞掉
-                row = data.loc[last, sym]
-                if pd.isna(row.get("High")):
-                    data.loc[last, (sym, "High")] = price
-                if pd.isna(row.get("Low")):
-                    data.loc[last, (sym, "Low")] = price
-                if pd.isna(row.get("Open")):
-                    data.loc[last, (sym, "Open")] = price
-                if pd.isna(row.get("Volume")):
-                    data.loc[last, (sym, "Volume")] = 0
-                fixed += 1
-    print(f"  [注意] {len(missing)} 檔這批收盤價缺漏，用即時價補回 {fixed} 檔"
-          + ("" if fixed == len(missing) else f"，{len(missing) - fixed} 檔查不到只好維持缺漏"))
+def apply_official_ohlcv(df, item):
+    """用證交所／櫃買中心官方公告的「今天」OHLCV 校正／補上 Yahoo 資料的最新一天：**官方資料
+    為主、Yahoo 為輔**——官方收盤後很快就定案，拿來當正確答案；Yahoo 只用來補歷史序列（算
+    均線/RSI 需要看一整年，官方查詢介面一次只能查當天，沒辦法拿來抓歷史）。不管 Yahoo 那天
+    的資料是缺漏（NaN）、還是跟官方對不上，一律整筆換成官方的，不是只補缺漏——這樣才不會有
+    「Yahoo 當下資料還沒穩定，算出來的訊號每次都不一樣」的問題（同一天的官方資料不會變，
+    不管重跑幾次結果都該一樣）。
+    用 item 自己的 date（來自 get_universe()，上市／上櫃各自回報，不是統一的一個「今天」）：
+    只有官方日期「不比 Yahoo 目前最新一筆舊」才套用，不然反而會用過期的官方資料去蓋掉 Yahoo
+    已經比較新的資料（上市這邊的來源也不是永遠不會出狀況，保留這一層判斷比較保險）。
+    做法比照 market_status() 校正大盤指數的方式：把 Yahoo 資料裡「今天」那一筆丟掉，換成
+    官方這筆接上去。官方日期或收盤價缺漏（例如那個市場的官方 API 這次剛好抓失敗）就完全
+    不動，維持原本 Yahoo 的資料，退回舊的（較不穩但至少有資料）行為。"""
+    price, official_date = item.get("price"), item.get("date")
+    if df.empty or not official_date or not price:
+        return df
+    ts = pd.Timestamp(official_date, tz=df.index.tz)
+    if ts < df.index[-1]:
+        return df   # 官方資料比 Yahoo 現有的還舊，Yahoo 已經比較新，不要用舊資料反而蓋掉
+    row = pd.DataFrame([{
+        "Open": item.get("open") or price, "High": item.get("high") or price,
+        "Low": item.get("low") or price, "Close": price, "Adj Close": price,
+        "Volume": item.get("volume") or 0,
+    }], index=[ts])
+    return pd.concat([df[df.index < ts], row])
 
 
 def sanitize(obj):
     """Python 的 json.dumps 預設會把 NaN/Infinity 這種數字寫成 JSON 沒有的 NaN/Infinity
     字面值，瀏覽器的 JSON.parse 遇到就直接整份報錯、後面的資料全部讀不到（單一一檔壞資料
-    就讓全站掛掉）。理論上前面 repair_missing_close() 已經補掉已知會缺漏的欄位，這裡是
+    就讓全站掛掉）。理論上前面 apply_official_ohlcv() 已經補掉已知會缺漏的欄位，這裡是
     保險：把漏網的 NaN/Infinity 都換成 null，最壞情況也只是那一檔某個欄位缺著，不會拖累
     其他 1900 多檔。"""
     if isinstance(obj, float):
@@ -499,10 +539,10 @@ def main():
             print(f"[注意] 第 {i // CHUNK + 1} 批下載失敗：{e}")
             failed += len(part)
             continue
-        repair_missing_close(data, part)
         for item in part:
             try:
-                out = analyze_stock(item, data[item["sym"]], inst_notes)
+                df = apply_official_ohlcv(data[item["sym"]], item)
+                out = analyze_stock(item, df, inst_notes)
                 if not out:
                     continue
                 rec, rd, rw, date = out

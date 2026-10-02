@@ -4,9 +4,9 @@
 <title>DiStocks</title>
 <style>
 :root{--bg:#f7f7f5;--card:#fff;--text:#1f2328;--muted:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;
---good:#b42318;--bad:#067647;--warn:#b54708;--stop:#fff;--stopbg:#b42318}
+--good:#b42318;--bad:#067647;--warn:#b54708;--stop:#fff;--stopbg:#b42318;--edge-shadow:rgba(0,0,0,.16)}
 @media (prefers-color-scheme:dark){:root{--bg:#111315;--card:#1a1d21;--text:#e6e8eb;--muted:#9aa1ab;
---line:#2c3138;--accent:#7aa2ff;--good:#ff8a80;--bad:#6ee7a8;--warn:#fbbf24}}
+--line:#2c3138;--accent:#7aa2ff;--good:#ff8a80;--bad:#6ee7a8;--warn:#fbbf24;--edge-shadow:rgba(255,255,255,.1)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
 font:15px/1.5 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif}
@@ -17,6 +17,12 @@ h2{font-size:16px;margin:28px 0 10px}
 .market{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:14px 0;font-size:14px}
 .market div{margin:2px 0}
 .tablewrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
+/* 手機上表格常常比螢幕寬，要左右滑動才看得到後面的欄位（買進價後面還有最高價/現價/損益/
+   停損/停利/建議），但滑動容器本身看起來跟一般不會動的區塊沒兩樣，很容易讓人以為「就只有
+   這些欄位」而漏看——can-scroll-x 時在右邊加一條淡淡的陰影當提示，捲到底（at-end）才消失，
+   由 updateScrollHints() 這個 JS 自動判斷要不要加，不用每個表格手動加。 */
+.tablewrap.can-scroll-x{box-shadow:inset -16px 0 12px -12px var(--edge-shadow)}
+.tablewrap.can-scroll-x.at-end{box-shadow:none}
 table{border-collapse:collapse;width:100%;min-width:560px}
 th,td{padding:10px 12px;text-align:center;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-size:12px;color:var(--muted);font-weight:600}
@@ -183,10 +189,10 @@ __MARKET__
 __MULTI__
 
 <h2>每日候選：可留意的買進標的</h2>
-<div class="sub">每日17點自動更新。</div>
+<div class="sub">每日21點自動更新。</div>
 __DAILY__
 <h2>每週候選（週線，中期趨勢）</h2>
-<div class="sub">每週五17點自動更新。</div>
+<div class="sub">每週五21點自動更新。</div>
 __WEEKLY__
 
 <footer class="sitefooter">
@@ -390,13 +396,17 @@ __WEEKLY__
   // 1. 剛買進時，用「訊號／買進當時算好」的固定停損、停利（不會因為股價創新高就提早往上調）。
   // 2. 一旦「股價達到停利參考」或「季線轉弱」兩者之一發生，永久切換成移動停損（hd.trailing 標記，
   //    只會從 false 變 true，不會變回去）：之後停損跟著最高價走，停利不再設頂、讓獲利有機會繼續跑。
+  // 表單一定會存一個 >0 的 stopPct（見 holdingForm()），這裡多一層防呆：萬一資料是舊格式、
+  // 或從別的裝置同步過來時剛好缺這個欄位，退回預設 8%，不要讓 (1 - null/100) 變成 1、
+  // 算出「停損＝最高價」這種一創新高就立刻觸發停損的離譜結果。
+  function stopPctOf(hd) { return hd.stopPct > 0 ? hd.stopPct : 8; }
   function holdingStop(hd) {
-    if (hd.trailing) return peakOf(hd) * (1 - hd.stopPct / 100);            // 已切換：移動停損跟著最高價往上調
-    return hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100);   // 還沒切換：固定停損
+    if (hd.trailing) return peakOf(hd) * (1 - stopPctOf(hd) / 100);        // 已切換：移動停損跟著最高價往上調
+    return hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - stopPctOf(hd) / 100);   // 還沒切換：固定停損
   }
   function holdingTarget(hd) {   // 原始停利參考價：用「買進當時」的風險算，永遠不變（切不切換移動停損都一樣）
     if (hd.targetPrice != null) return hd.targetPrice;
-    const initialStop = hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - hd.stopPct / 100);
+    const initialStop = hd.stopPrice != null ? hd.stopPrice : hd.buyPrice * (1 - stopPctOf(hd) / 100);
     return hd.buyPrice + (hd.buyPrice - initialStop) * RR;
   }
   function updateTrailing(hd, s) {   // 檢查是否該從「固定停損」切換成「移動停損」；已切換就不用再檢查
@@ -839,6 +849,25 @@ __WEEKLY__
     const d = e.target.closest('[data-detail]');
     if (d) { e.preventDefault(); showDetail(d.dataset.detail); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
+  // 手機上表格常常要左右滑動才看得到後面的欄位，滑動容器本身看起來跟靜止的區塊沒兩樣，
+  // 很容易讓人以為只有看得到的那幾欄——偵測哪些 .tablewrap 真的比內容窄（can-scroll-x），
+  // 捲到底了（at-end）就不用再提示。用 MutationObserver 監看整個頁面，不用在每個會重畫
+  // 表格的地方（renderWatch、renderHoldings...）都另外呼叫一次，不管哪裡重畫都抓得到。
+  function updateScrollHints() {
+    document.querySelectorAll('.tablewrap').forEach(el => {
+      const can = el.scrollWidth > el.clientWidth + 1;
+      el.classList.toggle('can-scroll-x', can);
+      if (can) el.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+    });
+  }
+  document.addEventListener('scroll', e => {
+    if (e.target.classList && e.target.classList.contains('tablewrap')) updateScrollHints();
+  }, true);
+  window.addEventListener('resize', updateScrollHints);
+  new MutationObserver(() => requestAnimationFrame(updateScrollHints))
+    .observe(document.body, { childList: true, subtree: true });
+  updateScrollHints();
+
   refresh();
   renderHoldings();
   loadQuotes();

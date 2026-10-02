@@ -101,8 +101,12 @@ def main():
 
     # GitHub Actions 的伺服器用 UTC 時間，time.strftime 會抓到 UTC，跟台灣時間差 8 小時，
     # 網頁上顯示「盤中 HH:MM」才不會誤導成台灣時間
-    now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
-    payload = {"time": now, "prices": prices}
+    now = datetime.now(timezone(timedelta(hours=8)))
+    # date 另外存，不是只有 time：intraday-quotes.yml 萬一哪天沒跑成功（例如排程設定出錯、
+    # 或 GitHub 卡住），這份資料可能停在好幾天前，只顯示「HH:MM」完全看不出是哪一天的、
+    # 網頁會一直誤用這個過期的盤中價——網頁那邊（loadQuotes()）會拿這個日期跟當天的分析
+    # 日期比對，不是今天的就直接當作沒有盤中價格，退回用收盤價。
+    payload = {"date": now.strftime("%Y-%m-%d"), "time": now.strftime("%H:%M"), "prices": prices}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     print(f"已存 {out_path.name}：{len(prices)}/{len(pairs)} 檔（{payload['time']}）")

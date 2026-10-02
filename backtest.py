@@ -66,7 +66,10 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
     """回傳 (結果, 結果日期, 實際報酬%, 持有天數)；資料不足（例如剛下市查不到）回傳 None，
     這種情況維持原狀，不覆蓋，下次還可以再試。"""
     try:
-        sub = df[df.index >= pd.Timestamp(signal_date)]
+        # fetch_history() 回傳的 df 索引是時區感知的（Asia/Taipei），跟沒給時區的 Timestamp
+        # 比較會直接丟 TypeError——之前只用沒時區的假資料測過，沒踩到這個問題，實際資料
+        # 一定要比照 df 自己的時區建立 Timestamp 才不會整批都比較失敗。
+        sub = df[df.index >= pd.Timestamp(signal_date, tz=df.index.tz)]
     except Exception:
         return None
     if sub.empty:

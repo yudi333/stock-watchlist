@@ -364,6 +364,9 @@ __WEEKLY__
       const r = await fetch('quotes.json?t=' + Date.now(), { cache: 'no-store' });
       if (!r.ok) return;
       const d = await r.json();
+      // quotes.json 若不是「今天」的（盤中報價排程萬一哪天沒跑成功，留著好幾天前的舊檔），
+      // 完全不採用，退回用收盤價——不然會一直顯示某一天卡住不動的盤中價格，卻看不出來是舊的。
+      if (d.date && D.date && d.date !== D.date) { LIVE = {}; LIVE_TIME = null; return; }
       LIVE = d.prices || {}; LIVE_TIME = d.time || null;
       if (holdings.length) renderHoldings();   // 换上盤中價格重新渲染
     } catch (e) { /* 抓不到就用收盤價，這是正常情況（例如非交易時段），不用提示 */ }

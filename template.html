@@ -773,7 +773,7 @@ __WEEKLY__
     hits = D.stocks.filter(s => s.code.startsWith(q) || s.name.toLowerCase().includes(q))
       .sort((a, b) => (b.code === q) - (a.code === q) || a.code.localeCompare(b.code)).slice(0, 8);
     hi = 0; results.hidden = false;
-    if (!hits.length) { results.append(el('div', { class: 'msg' }, `找不到「${input.value.trim()}」。只收錄上市、上櫃的 4 碼個股（不含 ETF、興櫃）。`)); return; }
+    if (!hits.length) { results.append(el('div', { class: 'msg' }, `找不到「${input.value.trim()}」。只收錄上市、上櫃的個股與 ETF（不含興櫃）。`)); return; }
     hits.forEach((s, i) => results.append(el('button', { class: i === 0 ? 'on' : '', onclick: () => pick(s.code) },
       el('span', { class: 'code' }, s.code), el('span', {}, s.name),
       el('span', { class: 'tag ' + LV[s.level], style: 'margin-left:auto' }, LVNAME[s.level]))));

@@ -83,7 +83,7 @@ def fetch_market(url, code_key, name_key, value_key, volume_key, price_key, suff
 
 
 def get_universe():
-    """回傳所有 4 碼個股（上市 + 上櫃）：[{code, name, sym, mkt, value, volume, price}]。
+    """回傳所有個股＋ETF（上市 + 上櫃）：[{code, name, sym, mkt, value, volume, price}]。
     value=成交金額、volume=成交量（股數）——候選股同時看這兩個排名（見 main() 的 UNIVERSE_SIZE / VOLUME_SIZE），
     因為有些股票單價低、成交量很大，但成交金額排不進金額榜，只看金額會漏掉。"""
     items = []
@@ -96,8 +96,9 @@ def get_universe():
     for label, url, ck, nk, vk, volk, pk, suffix, mkt in sources:
         try:
             for c, n, _, v, vol, pr in fetch_market(url, ck, nk, vk, volk, pk, suffix):
-                # 只留 4 碼、且不是 0 開頭的（0 開頭是 ETF）
-                if re.fullmatch(r"[1-9]\d{3}", c):
+                # 一般個股：4 碼、不是 0 開頭；ETF：0 開頭，2~4 碼數字，槓桿/反向的最後可能多一個
+                # 英文字母（00631L、00632R 這種）。權證、特別股等其他代號格式都不留。
+                if re.fullmatch(r"[1-9]\d{3}|00\d{2,4}[A-Z]?", c):
                     items.append(dict(code=c, name=n, sym=c + suffix, mkt=mkt, value=v, volume=vol, price=pr))
         except Exception as e:  # 其中一邊失敗，不影響另一邊
             print(f"[注意] 抓不到{label}行情：{e}")

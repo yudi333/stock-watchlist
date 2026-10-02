@@ -59,7 +59,7 @@ python screener.py      # 產生 candidates_daily.csv、candidates_weekly.csv、
 python build_site.py    # 產生 site/index.html（網頁）
 ```
 
-從上市＋上櫃「成交金額前 200 名」∪「成交量前 200 名」（自動抓，已排除 ETF 與 `config.yaml` 的 watchlist）中，
+從上市＋上櫃「成交金額前 200 名」∪「成交量前 200 名」（自動抓，含一般個股與 ETF，排除 `config.yaml` 的 watchlist）中，
 套用課程「20 種買進訊號」（[signals.py](signals.py)）。兩個榜取聯集是因為有些股票單價低、成交量很大，
 但成交金額排不進金額榜，只看金額會漏掉。日線每天看，週線每週六看（同一套訊號，K 棒改成週）。
 每檔列出 **買進區間、停損價、停利價、賺賠比** 與白話理由，並標示「現價」在區間內、高於區間（勿追）還是低於區間。

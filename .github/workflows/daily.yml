@@ -109,6 +109,20 @@ jobs:
       - name: 算出今天的日期（台灣時間）
         id: today
         run: echo "date=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_OUTPUT"
+      # checkout 要放在「讀取今天稍早那則訊息的 id」之前：actions/checkout 預設會先執行
+      # git clean，把工作目錄裡所有沒被 git 追蹤的檔案都清掉，.tg-message-id 這種快取恢復
+      # 出來的資料夾正是這種「未追蹤」檔案——順序顛倒的話，快取才剛恢復就被 checkout 清掉，
+      # 讀 id 永遠讀到空的，變成每次都誤判成「今天還沒發過」，每次都發新訊息而不是編輯舊的
+      # （這個 bug 第一次改成「每次都跑」時踩到過，這裡是修正後的正確順序）。
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - uses: actions/download-artifact@v4
+        continue-on-error: true   # build 太早失敗、根本沒產生 message.txt 也沒關係
+        with:
+          name: notify-message
       - name: 讀取今天稍早那則訊息的 id（如果有的話）
         # 不是「一天只發一次」，是「一天只留一則、內容一直更新成最新一次的結果」：
         # 15:07/16:10/18:00 這三次都會執行到下面，但不是每次都發新訊息——第一次（cache
@@ -121,15 +135,6 @@ jobs:
         with:
           path: .tg-message-id
           key: notified-${{ steps.today.outputs.date }}
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install requests
-      - uses: actions/download-artifact@v4
-        continue-on-error: true   # build 太早失敗、根本沒產生 message.txt 也沒關係
-        with:
-          name: notify-message
       - name: 讀取快取裡的訊息 id
         id: read_id
         run: echo "id=$(cat .tg-message-id/id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"

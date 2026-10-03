@@ -81,6 +81,8 @@ jobs:
         env:
           GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID_STOP: ${{ secrets.TG_CHAT_ID_STOP }}   # 已停損/已停利另外發到這個群組，沒設定就略過
       - uses: actions/upload-artifact@v4   # 存成 artifact 讓 notify job（別的 runner）讀得到
         if: always()
         with:

@@ -12,11 +12,17 @@
 已經有終局結果（已停利/已停損/過期）的列不會再重查，只處理還在追蹤或還沒進場的列，
 所以就算歷史紀錄累積很多筆，每次真正要重新抓資料的也只有一小部分。
 
+這次執行新判定出「已停損」或「已停利」的列（本來是追蹤中/尚未進場，這次才變成終局結果），
+會另外發一則 Telegram 通知到專門的群組（跟每天的候選股摘要分開，見下面的環境變數），
+方便只想追蹤「結果」的人訂閱這個群組就好，不用每天收候選股清單。
+
 用法（在 GitHub Actions 裡自動執行，見 daily.yml）：
   python backtest.py
 
 需要環境變數（跟 sheets_log.py 共用同一組）：
   GOOGLE_SHEETS_KEY / GOOGLE_SHEETS_ID
+停損/停利通知需要（跟 notify.py 共用同一個 bot，但另開一個群組/聊天室）：
+  TG_BOT_TOKEN / TG_CHAT_ID_STOP
 沒設定的話會直接略過，不會讓更新失敗。
 """
 
@@ -99,26 +105,28 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
 
 
 def backtest_sheet(sh, title, code_col, date_col):
-    """處理一個分頁，回傳更新了幾列。code_col/date_col 是「代號」「日期」欄的名字。"""
+    """處理一個分頁，回傳 (更新了幾列, 這次新產生的已停損/已停利事件列表)。
+    code_col/date_col 是「代號」「日期」欄的名字。"""
     import gspread
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
-        return 0
+        return 0, []
     values = ws.get_all_values()
     if len(values) < 2:
-        return 0
+        return 0, []
     header, result_col_idx = ensure_result_cols(ws, values[0])
     idx = {name: header.index(name) for name in
-           [code_col, date_col, "買進下限", "買進上限", "停損價", "停利價"] if name in header}
+           [code_col, date_col, "名稱", "買進下限", "買進上限", "停損價", "停利價"] if name in header}
     needed = [code_col, date_col, "買進下限", "買進上限", "停損價", "停利價"]
     if any(n not in idx for n in needed):
         print(f"[注意] {title} 缺少必要欄位（{[n for n in needed if n not in idx]}），略過這個分頁。")
-        return 0
+        return 0, []
 
     expire_days = EXPIRE_DAYS[title]
     cache = {}          # 代號 -> DataFrame，同一檔股票在同一次執行裡只抓一次
     updates = []         # gspread batch_update 用
+    events = []          # 這次新產生的已停損/已停利，給 Telegram 另外通知用
     checked, changed = 0, 0
     for r in range(1, len(values)):
         row = values[r] + [""] * (len(header) - len(values[r]))   # 舊資料列可能還沒有結果欄，補空字串對齊
@@ -156,10 +164,48 @@ def backtest_sheet(sh, title, code_col, date_col):
         updates.append({"range": f"{gspread.utils.rowcol_to_a1(r + 1, lo)}:"
                                   f"{gspread.utils.rowcol_to_a1(r + 1, len(header))}",
                          "values": [new_row[lo - 1:]]})
+        if 新結果 in ("已停損", "已停利"):
+            # 進來這個 for 迴圈的列，status 一定還在 OPEN_STATUSES（追蹤中/尚未進場/空白），
+            # 所以只要這次評出「已停損」或「已停利」，就一定是這次執行才第一次定案——
+            # 不用另外比對「跟上次一樣就不重複通知」，天生就不會重複發。
+            events.append({
+                "title": title, "code": code,
+                "name": row[idx["名稱"]] if "名稱" in idx else "",
+                "result": 新結果, "pct": 報酬, "days": 天數,
+            })
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")
     print(f"{title}：檢查 {checked} 列，更新 {changed} 列")
-    return changed
+    return changed, events
+
+
+def notify_stop_events(events):
+    """已停損/已停利的列另外發一則 Telegram 通知到專門的群組（TG_CHAT_ID_STOP），
+    跟 notify.py 每天發的候選股摘要（TG_CHAT_ID）完全分開、各自獨立的訂閱對象。"""
+    if not events:
+        print("這次沒有新的已停損/已停利，不用發通知。")
+        return
+    token, chat = os.environ.get("TG_BOT_TOKEN"), os.environ.get("TG_CHAT_ID_STOP")
+    if not token or not chat:
+        print("沒有設定 TG_CHAT_ID_STOP，略過停損/停利通知。")
+        return
+    import requests
+    lines = [f"🔔 {len(events)} 檔觸發停損/停利", ""]
+    for e in events:
+        emoji = "🟢" if e["result"] == "已停利" else "🔴"
+        pct = f"{e['pct']:+.1f}%" if e["pct"] is not None else "-"
+        lines.append(f"{emoji}［{e['title']}］{e['code']} {e['name']}　{e['result']}　"
+                     f"{pct}（持有 {e['days']} 天）")
+    lines += ["", "僅為資料分析，不是投資建議；自負盈虧"]
+    text = "\n".join(lines)
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          json={"chat_id": chat, "text": text[:4000]}, timeout=30)
+        r.raise_for_status()
+        print(f"已發送 {len(events)} 筆停損/停利通知。")
+    except Exception as e:
+        # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
+        print(f"停損/停利通知發送失敗（{type(e).__name__}），請檢查 token 與 chat id。")
 
 
 def main():
@@ -173,10 +219,14 @@ def main():
         return 0
 
     try:
-        n1 = backtest_sheet(sh, "多重訊號", "代號", "日期")
-        n2 = backtest_sheet(sh, "每日候選", "代號", "日期")
-        n3 = backtest_sheet(sh, "每週候選", "代號", "日期")
+        n1, e1 = backtest_sheet(sh, "多重訊號", "代號", "日期")
+        n2, e2 = backtest_sheet(sh, "每日候選", "代號", "日期")
+        n3, e3 = backtest_sheet(sh, "每週候選", "代號", "日期")
         print(f"回測完成：多重訊號更新 {n1} 列、每日候選更新 {n2} 列、每週候選更新 {n3} 列")
+        try:
+            notify_stop_events(e1 + e2 + e3)
+        except Exception as e:   # 通知失敗不該讓回測本身被當成失敗（結果已經寫進試算表了）
+            print(f"[注意] 停損/停利通知發送時發生例外（{type(e).__name__}），略過。")
     except Exception as e:
         print(f"[注意] 回測失敗（{type(e).__name__}：{e}），略過這次。完整錯誤：")
         traceback.print_exc()

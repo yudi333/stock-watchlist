@@ -37,7 +37,8 @@ DAILY = dict(
     y_bars=252, pivot_k=3, pivot_gap=8, box_min=15, box_range=0.15, tri_n=45, w_n=90,
     w_gap=8, hs_n=120, hs_recent=40, flag_len=(5, 25), pole_n=15, pole_gain=0.20,
     cup_n=120, handle_len=(3, 25), cup_min_side=10, mirror_n=60, mirror_pull_n=30,
-    gap_look=10, gap_pct=0.03, fb_n=40, hammer_range=0.03, risk_range=(3, 8),
+    gap_look=10, gap_pct=0.03, fb_n=40, hammer_range=0.03,
+    risk_range=(8, 15),   # 停損幅度下限 8%／上限 15%，見 signals.py 的 build_trade() 說明
 )
 WEEKLY = dict(
     label="週線", unit="週", min_bars=70, ma_slow=13, up_lookback=4, pull_mas=(5, 10),
@@ -45,7 +46,8 @@ WEEKLY = dict(
     y_bars=52, pivot_k=2, pivot_gap=4, box_min=8, box_range=0.15, tri_n=24, w_n=45,
     w_gap=4, hs_n=60, hs_recent=20, flag_len=(3, 10), pole_n=8, pole_gain=0.25,
     cup_n=60, handle_len=(2, 8), cup_min_side=6, mirror_n=26, mirror_pull_n=12,
-    gap_look=4, gap_pct=0.05, fb_n=20, hammer_range=0.06, risk_range=(4, 10),
+    gap_look=4, gap_pct=0.05, fb_n=20, hammer_range=0.06,
+    risk_range=(8, 15),   # 停損幅度下限 8%／上限 15%，見 signals.py 的 build_trade() 說明
 )
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -195,7 +197,7 @@ def evaluate(df, p):
             m = det(x)
         except Exception:
             m = None                       # 單一訊號算錯不影響其他訊號
-        t = build_trade(m, p) if m else None
+        t = build_trade(m, p, x) if m else None
         if t:
             t["prio"] = DETECTORS.index(det)
             matches.append(t)

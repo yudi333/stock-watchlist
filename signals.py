@@ -12,9 +12,11 @@ import numpy as np
 import pandas as pd
 
 RISK_REWARD = 2.0       # 賺賠比至少 2:1（課程：2:1 或 3:1）
-HARD_MAX_RISK = 0.10    # 課程：停損最多 10%
+HARD_MAX_RISK = 0.15    # 停損最多 15%（原本課程紀律是 10%，使用者要求放寬到跟 risk_range 的
+                        # 上限一致，見 screener.py 的 DAILY/WEEKLY risk_range=(8, 15)）
 MAX_TARGET_GAIN = 0.40  # 滿足點公式有時算出翻倍以上，停利價保守限制在 +40%
 CHASE_PCT = 0.03        # 突破後最多追到突破價 +3%，超過就算追高（不追，等回測）
+MA_SUPPORT_SET = (5, 10, 20, 60)   # 停損參考的支撐線：週線、10日、月線、季線（日線週線共用這組）
 
 
 # ---------------------------------------------------------------
@@ -422,19 +424,48 @@ DETECTORS = [sig15_cup_handle, sig8_w_bottom, sig7_hs_bottom, sig4_triangle,
 # ---------------------------------------------------------------
 # 停損 / 停利：依課程紀律
 # ---------------------------------------------------------------
-def build_trade(m, p):
+def nearest_ma_support(x, entry):
+    """在 MA_SUPPORT_SET（週線/10日/月線/季線）裡，找現在仍然在進場價下方、離進場價最近
+    （也就是數值最高）的那一條均線，當作另一個停損參考——這條均線還沒被跌破，代表它現在
+    還撐得住，是「支撐線」；如果全部均線都在進場價上方（代表還沒拉回到任何均線），回傳 None，
+    這種情況完全用型態本身的防守點。"""
+    below = [x.ma[k][-1] for k in MA_SUPPORT_SET
+             if k in x.ma and not pd.isna(x.ma[k][-1]) and x.ma[k][-1] < entry]
+    return max(below) if below else None
+
+
+def build_trade(m, p, x=None):
     """
     m 有目標價（有公式的訊號）：
-        停損 = 防守點下方 1%，但停損幅度 ≤ 獲利目標的 1/2 且 ≤ 10%，賺賠比至少 2:1。
-    m 沒有目標價（課程沒給公式）：停損 = 防守點下方 1%，停利 = 2 倍風險。
+        停損 = 防守參考下方 1%，但停損幅度 ≤ 獲利目標的 1/2 且 ≤ 15%，賺賠比至少 2:1。
+    m 沒有目標價（課程沒給公式）：停損 = 防守參考下方 1%，停利 = 2 倍風險。
     不合格回傳 None。
+
+    「防守參考」= 型態本身的防守點（defence，課程原本的規則：關鍵低點）跟均線支撐
+    （nearest_ma_support()，見上面）兩個都算，**取比較低、比較寬鬆的那一個**——型態的關鍵
+    低點常常跟進場價靠得很近（尤其突破型訊號，防守點就是剛被突破的關卡本身），只看這一個
+    容易被正常盤中雜訊洗出場；均線支撐通常離現價更有緩衝空間。傳 x（Ctx）才會算均線支撐，
+    沒傳（或均線都在進場價上方）就只用型態防守點，維持原本的行為。
+
+    p["risk_range"] = (lo, hi)：停損幅度（佔進場價%）的下限／上限，不是課程規定，是這支程式
+    自己訂的（目前日線、週線都是 8~15%，見 screener.py 的 DAILY/WEEKLY）。hi 跟 HARD_MAX_RISK
+    一致，是賺賠比限制之外另外設的硬上限；lo 是防呆下限，確保算出來的停損不會窄到被正常盤中
+    雜訊隨便洗出場。
     """
     entry, defence, target = m["entry"], m["defence"], m["target"]
     if not entry > defence > 0:
         return None
     lo, hi = p["risk_range"]
+    ma_support = nearest_ma_support(x, entry) if x is not None else None
+
+    def guarded_stop():
+        s = defence * 0.99
+        if ma_support is not None:
+            s = min(s, ma_support * 0.99)   # 兩個防守參考取較低（較寬鬆）的那個
+        return s
+
     if target is None:
-        stop = defence * 0.99
+        stop = guarded_stop()
         risk = (entry - stop) / entry * 100
         if risk > hi:
             return None
@@ -448,7 +479,7 @@ def build_trade(m, p):
         if gain <= 0:
             return None
         cap = min(HARD_MAX_RISK * entry, gain / RISK_REWARD)
-        stop = max(defence * 0.99, entry - cap)
+        stop = max(guarded_stop(), entry - cap)
         if (entry - stop) / entry * 100 < lo:
             stop = entry * (1 - lo / 100)
         if gain < (entry - stop) * RISK_REWARD:

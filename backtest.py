@@ -3,7 +3,8 @@
 把結果直接補寫回原本那一列（不是另外開新分頁）：結果、結果日期、實際報酬%、持有天數。
 只统计已經記錄過的建議後來的走勢，不會下單，也不影響網頁本身。
 
-判斷方式：從訊號那天開始往後看每天的最高/最低價——
+判斷方式：從訊號隔天開始往後看每天的最高/最低價（訊號是當天收盤才能確認的，隔天才可能真的
+進場，不能用訊號當天盤中、收盤前就已經走完的高低點）——
   還沒進場（最低價沒跌到買進上限之下、或最高價沒漲到買進下限之上）：標記「尚未進場」
   進場後最低價 <= 停損價：「已停損」（當天最高價同時也 >= 停利價的話，保守當作先停損）
   進場後最高價 >= 停利價：「已停利」
@@ -75,12 +76,23 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
         # fetch_history() 回傳的 df 索引是時區感知的（Asia/Taipei），跟沒給時區的 Timestamp
         # 比較會直接丟 TypeError——之前只用沒時區的假資料測過，沒踩到這個問題，實際資料
         # 一定要比照 df 自己的時區建立 Timestamp 才不會整批都比較失敗。
-        sub = df[df.index >= pd.Timestamp(signal_date, tz=df.index.tz)]
+        #
+        # 用「>」不是「>=」：訊號是用訊號當天的收盤價才能判斷出來的（例如突破要收盤價突破才算），
+        # 代表要等訊號當天收盤之後才會知道有這個訊號，最早也只能等「隔天」才可能進場。如果把
+        # 訊號當天本身也算進去，會把「收盤前盤中已經走完、你根本還不知道有訊號」的那段高低點
+        # 誤判成「進場後的走勢」——實測真的發生過：某檔訊號當天盤中最低點就已經低於停損價，
+        # 但收盤時突破拉回來，變成「當天進場、當天就停損」，但現實中你收盤才知道有訊號，
+        # 不可能用那個已經過去的盤中低點被停損。
+        sub = df[df.index > pd.Timestamp(signal_date, tz=df.index.tz)]
     except Exception:
         return None
     if sub.empty:
         return None
-    mid = (buy_lo + buy_hi) / 2   # 沒有實際成交紀錄，用買進區間中點當估計進場價算報酬%
+    # 沒有實際成交紀錄，用買進區間「上緣」當估計進場價算報酬%——不是用中點：signals.py 的
+    # build_trade() 本來就是以買進上緣（最壞的成交價）去反推停損/停利，兩邊要用同一個進場價
+    # 假設，算出來的報酬%才會跟訊號當初設計的風險（risk_pct）對得起來；用中點會比較樂觀，
+    # 同一筆 3% 設計風險的停損，算出來會變成只有約 1.5%，看起來比實際上安全。
+    entry = buy_hi
     entered, entry_idx = False, None
     for i in range(len(sub)):
         row = sub.iloc[i]
@@ -89,15 +101,15 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
         if entered:
             held = i - entry_idx
             if row["Low"] <= stop:
-                return "已停損", sub.index[i].strftime("%Y-%m-%d"), round(stop / mid * 100 - 100, 1), held
+                return "已停損", sub.index[i].strftime("%Y-%m-%d"), round(stop / entry * 100 - 100, 1), held
             if row["High"] >= target:
-                return "已停利", sub.index[i].strftime("%Y-%m-%d"), round(target / mid * 100 - 100, 1), held
+                return "已停利", sub.index[i].strftime("%Y-%m-%d"), round(target / entry * 100 - 100, 1), held
             if held >= expire_days:
                 return ("過期未觸發", sub.index[i].strftime("%Y-%m-%d"),
-                        round(row["Close"] / mid * 100 - 100, 1), held)
+                        round(row["Close"] / entry * 100 - 100, 1), held)
     if entered:
         held = len(sub) - 1 - entry_idx
-        return "追蹤中", "", round(sub.iloc[-1]["Close"] / mid * 100 - 100, 1), held
+        return "追蹤中", "", round(sub.iloc[-1]["Close"] / entry * 100 - 100, 1), held
     days_since = len(sub) - 1
     if days_since >= expire_days:
         return "過期未進場", "", None, days_since

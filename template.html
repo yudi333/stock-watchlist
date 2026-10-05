@@ -115,6 +115,12 @@ border:1px solid var(--line);background:var(--bg);color:var(--text)}
    改成標題那一欄自己縮寬、自己換行，帳號按鈕永遠固定在同一行的最右邊。 */
 .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
 .topbar>div:first-child{flex:1;min-width:0}
+.topbar-right{display:flex;align-items:flex-start;gap:8px;flex:0 0 auto}
+.iconbtn{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);
+  color:var(--text);font-size:18px;line-height:1;cursor:pointer;flex:0 0 auto}
+.iconbtn:active{background:var(--line)}
+.iconbtn.spin{animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .acctwrap{position:relative;flex:0 0 auto}
 .acctpanel{position:absolute;right:0;top:calc(100% + 8px);width:280px;max-width:calc(100vw - 32px);z-index:30}
 .acctpanel .syncbox{box-shadow:0 8px 24px rgba(0,0,0,.16)}
@@ -167,7 +173,12 @@ padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;pointer-events:non
     <h1>DiStocks</h1>
     <div class="sub">資料日期 __DATA_DATE__　·　網頁更新 __NOW__（台灣時間）</div>
   </div>
-  <div id="account" class="acctwrap"></div>
+  <div class="topbar-right">
+    <!-- iOS「加入主畫面」後是獨立 app 模式，沒有 Safari 的網址列/下拉刷新可以用，
+         只能靠這顆按鈕手動重新整理；doRefresh() 會強制跳過快取抓最新版頁面。 -->
+    <button id="refreshBtn" class="iconbtn" type="button" title="重新整理" aria-label="重新整理">⟳</button>
+    <div id="account" class="acctwrap"></div>
+  </div>
 </div>
 __MARKET__
 
@@ -867,6 +878,18 @@ __WEEKLY__
   new MutationObserver(() => requestAnimationFrame(updateScrollHints))
     .observe(document.body, { childList: true, subtree: true });
   updateScrollHints();
+
+  // iOS「加入主畫面」之後是獨立 app 模式，沒有 Safari 的網址列、也沒有下拉刷新可以用，
+  // 唯一能重新整理的辦法就是這顆按鈕——每日候選/多重訊號這些資料是建置網頁時就寫死在
+  // HTML 裡的（不是另外 fetch 回來的），一定要整頁重新載入才拿得到當天的最新結果；
+  // 用換網址（帶時間戳記）取代 location.reload()，確保瀏覽器真的重抓，不是直接用快取。
+  function doRefresh() {
+    const btn = $('refreshBtn');
+    btn.classList.add('spin');
+    btn.disabled = true;
+    location.href = location.pathname + '?t=' + Date.now();
+  }
+  $('refreshBtn').addEventListener('click', doRefresh);
 
   refresh();
   renderHoldings();

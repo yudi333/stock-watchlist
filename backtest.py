@@ -31,7 +31,7 @@ import json
 import os
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -70,8 +70,9 @@ def ensure_result_cols(ws, header):
 
 
 def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
-    """回傳 (結果, 結果日期, 實際報酬%, 持有天數)；資料不足（例如剛下市查不到）回傳 None，
-    這種情況維持原狀，不覆蓋，下次還可以再試。"""
+    """回傳 (結果, 結果日期, 實際報酬%, 持有天數, 買入日期)；資料不足（例如剛下市查不到）回傳
+    None，這種情況維持原狀，不覆蓋，下次還可以再試。買入日期是真正進場那天（不是訊號日），
+    還沒進場就是空字串。"""
     try:
         # fetch_history() 回傳的 df 索引是時區感知的（Asia/Taipei），跟沒給時區的 Timestamp
         # 比較會直接丟 TypeError——之前只用沒時區的假資料測過，沒踩到這個問題，實際資料
@@ -100,20 +101,22 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
             entered, entry_idx = True, i
         if entered:
             held = i - entry_idx
+            buy_date = sub.index[entry_idx].strftime("%Y-%m-%d")
             if row["Low"] <= stop:
-                return "已停損", sub.index[i].strftime("%Y-%m-%d"), round(stop / entry * 100 - 100, 1), held
+                return "已停損", sub.index[i].strftime("%Y-%m-%d"), round(stop / entry * 100 - 100, 1), held, buy_date
             if row["High"] >= target:
-                return "已停利", sub.index[i].strftime("%Y-%m-%d"), round(target / entry * 100 - 100, 1), held
+                return "已停利", sub.index[i].strftime("%Y-%m-%d"), round(target / entry * 100 - 100, 1), held, buy_date
             if held >= expire_days:
                 return ("過期未觸發", sub.index[i].strftime("%Y-%m-%d"),
-                        round(row["Close"] / entry * 100 - 100, 1), held)
+                        round(row["Close"] / entry * 100 - 100, 1), held, buy_date)
     if entered:
         held = len(sub) - 1 - entry_idx
-        return "追蹤中", "", round(sub.iloc[-1]["Close"] / entry * 100 - 100, 1), held
+        buy_date = sub.index[entry_idx].strftime("%Y-%m-%d")
+        return "追蹤中", "", round(sub.iloc[-1]["Close"] / entry * 100 - 100, 1), held, buy_date
     days_since = len(sub) - 1
     if days_since >= expire_days:
-        return "過期未進場", "", None, days_since
-    return "尚未進場", "", None, days_since
+        return "過期未進場", "", None, days_since, ""
+    return "尚未進場", "", None, days_since, ""
 
 
 def backtest_sheet(sh, title, code_col, date_col):
@@ -163,7 +166,7 @@ def backtest_sheet(sh, title, code_col, date_col):
         result = evaluate(df, row[idx[date_col]], buy_lo, buy_hi, stop, target, expire_days)
         if result is None:
             continue
-        新結果, 結果日期, 報酬, 天數 = result
+        新結果, 結果日期, 報酬, 天數, 買入日期 = result
         # 「追蹤中」「尚未進場」這種還沒定案的狀態，就算結果分類沒變，報酬%/持有天數每天都會
         # 往前走，所以不做「跟上次一樣就跳過」的最佳化，每次查到都直接寫回去。
         changed += 1
@@ -183,7 +186,7 @@ def backtest_sheet(sh, title, code_col, date_col):
             events.append({
                 "title": title, "code": code,
                 "name": row[idx["名稱"]] if "名稱" in idx else "",
-                "result": 新結果, "pct": 報酬, "days": 天數,
+                "result": 新結果, "pct": 報酬, "days": 天數, "buy_date": 買入日期,
             })
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")
@@ -191,9 +194,17 @@ def backtest_sheet(sh, title, code_col, date_col):
     return changed, events
 
 
+TITLE_ORDER = ["多重訊號", "每日候選", "每週候選"]   # 通知裡分組顯示的順序
+
+
 def notify_stop_events(events):
     """已停損/已停利的列另外發一則 Telegram 通知到專門的群組（TG_CHAT_ID_STOP），
-    跟 notify.py 每天發的候選股摘要（TG_CHAT_ID）完全分開、各自獨立的訂閱對象。"""
+    跟 notify.py 每天發的候選股摘要（TG_CHAT_ID）完全分開、各自獨立的訂閱對象。
+    依分頁（多重訊號／每日候選／每週候選）分組，每組前面先列已停損／已停利各幾檔。
+
+    顏色符號刻意跟「紅色＝警示、綠色＝安全」的直覺相反：已停利（賺錢）用🔴、已停損（賠錢）
+    用🟢，是跟台股看盤「紅漲綠跌」的習慣對齊，也跟這個網站其他地方的配色一致
+    （見 template.html 的 --good 是紅色、--bad 是綠色）。"""
     if not events:
         print("這次沒有新的已停損/已停利，不用發通知。")
         return
@@ -202,12 +213,26 @@ def notify_stop_events(events):
         print("沒有設定 TG_CHAT_ID_STOP，略過停損/停利通知。")
         return
     import requests
-    lines = [f"🔔 {len(events)} 檔觸發停損/停利", ""]
+    today = datetime.now(timezone(timedelta(hours=8)))
+    by_title = {}
     for e in events:
-        emoji = "🟢" if e["result"] == "已停利" else "🔴"
-        pct = f"{e['pct']:+.1f}%" if e["pct"] is not None else "-"
-        lines.append(f"{emoji}［{e['title']}］{e['code']} {e['name']}　{e['result']}　"
-                     f"{pct}（持有 {e['days']} 天）")
+        by_title.setdefault(e["title"], []).append(e)
+    titles = TITLE_ORDER + sorted(t for t in by_title if t not in TITLE_ORDER)   # 未知分頁名當保險墊在後面
+
+    lines = [f"日期：{today.year}年{today.month}月{today.day}日", f"🔔 {len(events)} 檔觸發停損/停利"]
+    for title in titles:
+        group = by_title.get(title)
+        if not group:
+            continue
+        stops = sum(1 for e in group if e["result"] == "已停損")
+        gains = sum(1 for e in group if e["result"] == "已停利")
+        lines += ["", f"［{title}］已停損：{stops} 檔　已停利：{gains} 檔"]
+        for e in group:
+            emoji = "🔴" if e["result"] == "已停利" else "🟢"
+            pct = f"{e['pct']:+.1f}%" if e["pct"] is not None else "-"
+            buy = f"買入日期：{e['buy_date']}，" if e["buy_date"] else ""
+            lines.append(f"{emoji} {e['code']} {e['name']}　{e['result']}　{pct}"
+                        f"（{buy}持有 {e['days']} 天）")
     lines += ["", "僅為資料分析，不是投資建議；自負盈虧"]
     text = "\n".join(lines)
     try:

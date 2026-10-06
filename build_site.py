@@ -295,6 +295,13 @@ def main():
     except Exception:
         pass                                    # 沒有大盤資料就不顯示這一塊
 
+    # 上市／上櫃其中一邊官方資料整個抓失敗時（screener.py 的 get_universe()），那個市場別
+    # 的股票會整批從搜尋／候選股／多重訊號消失，而且不會出現在下面「個股資料延遲」那個
+    # 提示裡（根本沒有這筆資料可以比對日期）——比單純某幾檔資料延遲嚴重，額外顯示一則。
+    if stocks.get("universe_warning"):
+        market_html += (f'<div class="market" style="border-color:var(--warn)">'
+                        f'<b>注意</b>：{stocks["universe_warning"]}</div>')
+
     # 個股資料若比整體最新日期舊（Yahoo／證交所那天資料剛好延遲），screener.py 已經在
     # 個股標籤加註「資料延遲」；這裡另外抓比例夠高時在最上方加一則明顯提示，避免被埋沒
     stale = sum(1 for s in stocks["stocks"] if s.get("date") and s["date"] != stocks["date"])

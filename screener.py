@@ -13,6 +13,7 @@ import json
 import math
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -75,6 +76,23 @@ FALLBACK = {
 }
 
 
+def get_with_retry(url, params=None, tries=3, backoff=3):
+    """requests.get 包一層重試：上市/上櫃的官方 API 偶爾會卡一下（實測發生過，隔幾秒再試
+    就通了），一天只跑一次的架構下，單次請求失敗就直接放棄代價很大（整個市場別的股票當天
+    會整批從網站消失，而且沒有任何提示），重試幾次成本很低，值得做。"""
+    last_exc = None
+    for i in range(tries):
+        try:
+            r = requests.get(url, params=params, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            last_exc = e
+            if i < tries - 1:
+                time.sleep(backoff)
+    raise last_exc
+
+
 def fetch_twse_quotes(days_back=5):
     """上市個股的官方每日收盤行情：(資料日期, {代號: {name, value, volume, price, open, high, low}})。
     用跟大盤指數（fetch_taiex_latest()）同一套查詢介面 MI_INDEX，不是 STOCK_DAY_ALL 那個
@@ -89,10 +107,8 @@ def fetch_twse_quotes(days_back=5):
             continue
         ymd = day.strftime("%Y%m%d")
         try:
-            r = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
-                             params={"response": "json", "date": ymd, "type": "ALLBUT0999"},
-                             headers=HEADERS, timeout=30)
-            r.raise_for_status()
+            r = get_with_retry("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+                               params={"response": "json", "date": ymd, "type": "ALLBUT0999"})
             data = r.json()
             if data.get("stat") != "OK":
                 continue
@@ -114,9 +130,7 @@ def fetch_twse_quotes(days_back=5):
 def fetch_tpex_quotes():
     """上櫃個股的官方每日收盤行情：(資料日期, {代號: {...}})。這個 OpenAPI 本身就是當天即時的
     （不像上市的 STOCK_DAY_ALL 那樣會delay 將近一天），不用像 fetch_twse_quotes() 那樣往回試。"""
-    r = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-                     headers=HEADERS, timeout=30)
-    r.raise_for_status()
+    r = get_with_retry("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes")
     rows = r.json()
     if not rows:
         return None, {}
@@ -515,6 +529,18 @@ def main():
     except Exception as e:
         print(f"取得股票清單失敗：{e}")
         return 1
+    # 上市／上櫃是兩個獨立來源（見 get_universe()），各自失敗互不影響——但也代表任何一邊
+    # 整個抓失敗時，那個市場別的股票會從頭到尾整批消失（搜尋、候選股、多重訊號都找不到），
+    # 而且不會被「個股資料延遲」那個提示抓到（因為根本沒有這筆資料可以比對日期）。這裡額外
+    # 檢查一次，有整個市場別掛零的話記下來，給網頁在最上方顯示明顯的警告。
+    present_mkts = {s["mkt"] for s in stocks}
+    universe_warning = None
+    missing = [label for label, mkt in (("上市", "TWSE"), ("上櫃", "TPEX")) if mkt not in present_mkts]
+    if missing:
+        universe_warning = ("、".join(missing) + "官方資料今天抓取失敗，這幾個市場別的股票"
+                             "暫時整批不會出現在搜尋／候選股/多重訊號裡，不是這些股票本身有問題；"
+                             "通常下次排程重跑就會恢復。")
+        print(f"[注意] {universe_warning}")
     # 候選股從「成交金額前 N 名」∪「成交量前 M 名」挑（流動性夠），並排除你已在觀察的；
     # 兩個榜合併是因為有些股票單價低、成交量很大，但成交金額排不進金額榜，只看金額會漏掉
     eligible = [s for s in stocks if s["price"] >= MIN_PRICE]
@@ -570,7 +596,8 @@ def main():
         print(f"[注意] {stale} 檔資料比整體日期（{data_date}）舊，已加註標籤")
 
     (BASE_DIR / "stocks.json").write_text(
-        json.dumps(sanitize({"date": data_date, "stocks": records}), ensure_ascii=False, separators=(",", ":")),
+        json.dumps(sanitize({"date": data_date, "stocks": records, "universe_warning": universe_warning}),
+                   ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8")
     print(f"\n已存 stocks.json：{len(records)} 檔可搜尋")
 

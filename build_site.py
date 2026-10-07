@@ -244,6 +244,16 @@ def main():
         if src.exists():
             (SITE_DIR / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
+    # App 圖示（icons/）：給 iOS「加入主畫面」跟瀏覽器分頁用，二進位檔案不能用 write_text，
+    # 整個資料夾原封不動複製進 site/icons/
+    icons_src = BASE_DIR / "icons"
+    if icons_src.exists():
+        icons_dst = SITE_DIR / "icons"
+        icons_dst.mkdir(exist_ok=True)
+        for f in icons_src.iterdir():
+            if f.is_file():
+                (icons_dst / f.name).write_bytes(f.read_bytes())
+
     # 盤中報價（quotes.json）只有 intraday-quotes.yml 會更新，這裡（daily.yml）不會重算；
     # 沒有這一段的話，daily.yml 每次發布都會把它整個蓋掉，要等到下一次 intraday 執行
     # （最快 30 分鐘後，若已過盤中時段就要等到隔天開盤）才會補回來，這段時間「我的持股」

@@ -161,6 +161,28 @@ def fetch_tpex_quotes():
     return date, quotes
 
 
+def fetch_finmind_codes(mkt):
+    """FinMind（finmindtrade.com，第三方維護的開源財經資料平台，跟證交所/櫃買中心是完全
+    不同的系統）的代號清單，當官方 API 跟我們自己的快取都失敗時最後一層備援：mkt 是 "TWSE"
+    或 "TPEX"，回傳 {代號: {name}}（只有名字，沒有價格——FinMind 免費版查全市場股價要付費
+    方案，這裡只是為了不讓代號整批消失，股價交給 apply_official_ohlcv() 空手讓 Yahoo 頂）。
+    免費、不用註冊/token，但畢竟是外部服務，照樣包進 get_with_retry()，抓不到就回傳 {}。"""
+    want = "twse" if mkt == "TWSE" else "tpex"
+    try:
+        r = get_with_retry("https://api.finmindtrade.com/api/v4/data",
+                           params={"dataset": "TaiwanStockInfo"}, tries=2, backoff=2)
+        rows = r.json().get("data", [])
+    except Exception as e:
+        print(f"[注意] FinMind 代號清單也抓不到：{e}")
+        return {}
+    # price 用 0 不用 None：apply_official_ohlcv() 靠「not price」判斷要不要套用，0 一樣會被
+    # 正確跳過；但 main() 另外有 `s["price"] >= MIN_PRICE` 這個篩選，用 None 會直接丟 TypeError
+    # 讓整個分析失敗，0 則能安全比較（反正本來就該被篩掉，不計入候選股的流動性排名）。
+    return {row["stock_id"]: dict(name=row["stock_name"], value=0, volume=0,
+                                   price=0, open=0, high=0, low=0)
+            for row in rows if row.get("type") == want}
+
+
 def get_universe():
     """回傳所有個股＋ETF（上市 + 上櫃）：[{code, name, sym, mkt, value, volume, price, open, high, low, date}]。
     value=成交金額、volume=成交量（股數）——候選股同時看這兩個排名（見 main() 的 UNIVERSE_SIZE / VOLUME_SIZE），
@@ -171,11 +193,16 @@ def get_universe():
     不能假設兩邊「今天」都已經更新到位，各自記自己實際拿到的日期才準。
 
     get_with_retry() 已經會重試，但官方那端萬一真的掛比較久（實測發生過：重試 3 次、每次
-    間隔幾秒，加起來不到 10 秒，碰上拖比較久的異常就還是救不回來），這裡再加一層：重試後
-    還是整個市場別掛零，就退回 load_universe_cache() 存的「上一次成功抓到」的那份（代號、
-    名稱、價格都是舊的）——代號、名稱還是對的，價格雖然是舊的，但 apply_official_ohlcv()
-    本來就會因為這個日期比 Yahoo 現有資料舊而不套用，實際抓股價還是靠 Yahoo，差別只在於
-    這些股票不會從搜尋/候選股/多重訊號裡整批消失。"""
+    間隔幾秒，加起來不到 10 秒，碰上拖比較久的異常就還是救不回來），這裡再加兩層備援，
+    依序嘗試：
+      1. load_universe_cache() 存的「上一次成功抓到」的那份（代號、名稱、價格都是舊的）——
+         代號、名稱還是對的，價格雖然是舊的，但 apply_official_ohlcv() 本來就會因為這個
+         日期比 Yahoo 現有資料舊而不套用，實際抓股價還是靠 Yahoo。
+      2. 如果連快取都沒有（第一次用、或連續好幾天都失敗），改問 fetch_finmind_codes()——
+         FinMind 是跟證交所/櫃買中心完全不同的第三方系統，拿得到代號清單但沒有今天的價格
+         （免費版不支援整批查價），一樣交給 Yahoo 補股價。
+    不管是哪一層退回去的，股票都不會從搜尋/候選股/多重訊號裡整批消失，只是少了那層官方
+    價格校正。"""
     cache = load_universe_cache()   # 整個函式只讀一次；平常用不到，失敗時才派上用場
     items = []
     sources = [("上市", fetch_twse_quotes, ".TW", "TWSE"), ("上櫃", fetch_tpex_quotes, ".TWO", "TPEX")]
@@ -193,7 +220,11 @@ def get_universe():
                 print(f"[注意] 抓不到{label}官方行情，改用 {cached['date']} 那次成功抓到的快取。")
                 date, quotes = cached["date"], cached["quotes"]
             else:
-                print(f"[注意] 抓不到{label}官方行情，也沒有之前成功的快取可以退回去用。")
+                print(f"[注意] 抓不到{label}官方行情、也沒有快取，改問 FinMind 的代號清單。")
+                quotes = fetch_finmind_codes(mkt)
+                date = None   # 沒有價格可言，date 留空，apply_official_ohlcv() 看到就會跳過
+                if not quotes:
+                    print(f"[注意] FinMind 也抓不到{label}代號清單，這個市場別這次真的缺席。")
         for code, q in quotes.items():
             # 一般個股：4 碼、不是 0 開頭；ETF：0 開頭，2~4 碼數字，槓桿/反向的最後可能多一個
             # 英文字母（00631L、00632R 這種）。權證、特別股等其他代號格式都不留。

@@ -76,6 +76,24 @@ FALLBACK = {
 }
 
 
+SITE_URL = "https://yudi333.github.io/stock-watchlist"
+
+
+def load_universe_cache():
+    """讀線上目前的「上市/上櫃最近一次成功抓到的官方行情」快取（build_site.py 每次都會把
+    screener.py 存的 universe_cache.json 複製進 site/，跟 inst_history.json 用同一套
+    「讀線上、寫本機、下次 build 再部署」的滾動模式）。平常用不到，只有 get_universe() 重試
+    幾次後還是整個市場別都抓不到時，拿這份退回去用，不讓股票整批消失（見 get_universe()）。
+    抓不到就回傳空字典，當作「還沒有快取」，不會讓更新失敗。"""
+    try:
+        r = requests.get(f"{SITE_URL}/universe_cache.json?t={int(time.time())}", headers=HEADERS, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return {}
+
+
 def get_with_retry(url, params=None, tries=3, backoff=3):
     """requests.get 包一層重試：上市/上櫃的官方 API 偶爾會卡一下（實測發生過，隔幾秒再試
     就通了），一天只跑一次的架構下，單次請求失敗就直接放棄代價很大（整個市場別的股票當天
@@ -150,26 +168,46 @@ def get_universe():
     price/open/high/low 是證交所／櫃買中心官方公告的「今天」數字，以官方為準、Yahoo 為輔
     （見 apply_official_ohlcv()）：官方資料收盤後很快就定案，Yahoo 偶爾還要再等一段時間才穩定。
     date 是這筆官方資料實際對應的交易日——上市、上櫃是兩個不同系統，更新快慢可能不一樣，
-    不能假設兩邊「今天」都已經更新到位，各自記自己實際拿到的日期才準。"""
+    不能假設兩邊「今天」都已經更新到位，各自記自己實際拿到的日期才準。
+
+    get_with_retry() 已經會重試，但官方那端萬一真的掛比較久（實測發生過：重試 3 次、每次
+    間隔幾秒，加起來不到 10 秒，碰上拖比較久的異常就還是救不回來），這裡再加一層：重試後
+    還是整個市場別掛零，就退回 load_universe_cache() 存的「上一次成功抓到」的那份（代號、
+    名稱、價格都是舊的）——代號、名稱還是對的，價格雖然是舊的，但 apply_official_ohlcv()
+    本來就會因為這個日期比 Yahoo 現有資料舊而不套用，實際抓股價還是靠 Yahoo，差別只在於
+    這些股票不會從搜尋/候選股/多重訊號裡整批消失。"""
+    cache = load_universe_cache()   # 整個函式只讀一次；平常用不到，失敗時才派上用場
     items = []
     sources = [("上市", fetch_twse_quotes, ".TW", "TWSE"), ("上櫃", fetch_tpex_quotes, ".TWO", "TPEX")]
     for label, fetch, suffix, mkt in sources:
+        date, quotes = None, {}
         try:
             date, quotes = fetch()
-            if not quotes:
-                print(f"[注意] 抓不到{label}官方行情。")
-                continue
-            for code, q in quotes.items():
-                # 一般個股：4 碼、不是 0 開頭；ETF：0 開頭，2~4 碼數字，槓桿/反向的最後可能多一個
-                # 英文字母（00631L、00632R 這種）。權證、特別股等其他代號格式都不留。
-                if re.fullmatch(r"[1-9]\d{3}|00\d{2,4}[A-Z]?", code):
-                    items.append(dict(code=code, name=q["name"], sym=code + suffix, mkt=mkt,
-                                       value=q["value"], volume=q["volume"], price=q["price"],
-                                       open=q["open"], high=q["high"], low=q["low"], date=date))
         except Exception as e:  # 其中一邊失敗，不影響另一邊
             print(f"[注意] 抓不到{label}行情：{e}")
+        if quotes:
+            cache[mkt] = {"date": date, "quotes": quotes}   # 這次成功，更新快取，稍後存回本機
+        else:
+            cached = cache.get(mkt)
+            if cached and cached.get("quotes"):
+                print(f"[注意] 抓不到{label}官方行情，改用 {cached['date']} 那次成功抓到的快取。")
+                date, quotes = cached["date"], cached["quotes"]
+            else:
+                print(f"[注意] 抓不到{label}官方行情，也沒有之前成功的快取可以退回去用。")
+        for code, q in quotes.items():
+            # 一般個股：4 碼、不是 0 開頭；ETF：0 開頭，2~4 碼數字，槓桿/反向的最後可能多一個
+            # 英文字母（00631L、00632R 這種）。權證、特別股等其他代號格式都不留。
+            if re.fullmatch(r"[1-9]\d{3}|00\d{2,4}[A-Z]?", code):
+                items.append(dict(code=code, name=q["name"], sym=code + suffix, mkt=mkt,
+                                   value=q["value"], volume=q["volume"], price=q["price"],
+                                   open=q["open"], high=q["high"], low=q["low"], date=date))
+    try:
+        (BASE_DIR / "universe_cache.json").write_text(
+            json.dumps(cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    except Exception as e:
+        print(f"[注意] 寫入 universe_cache.json 失敗（{e}），不影響這次分析，只是下次少一層保險。")
     if not items:
-        print("[注意] 官方行情都抓不到，改掃內建的大型權值股清單。")
+        print("[注意] 官方行情跟快取都抓不到，改掃內建的大型權值股清單。")
         items = [dict(code=c, name=n, sym=c + ".TW", mkt="TWSE", value=1e12 - i, volume=1e12 - i,
                       price=999, open=999, high=999, low=999, date=None)
                  for i, (c, n) in enumerate(FALLBACK.items())]

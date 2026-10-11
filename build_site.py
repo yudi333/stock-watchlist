@@ -238,6 +238,13 @@ def main():
     if inst_path.exists():
         (SITE_DIR / "inst_history.json").write_text(inst_path.read_text(encoding="utf-8"), encoding="utf-8")
 
+    # 上市/上櫃「最近一次成功抓到的官方行情」快取：同一套「讀線上、寫本機、下次 build 再
+    # 部署」模式，screener.py 的 get_universe() 失敗重試後還是抓不到時會退回去用，見那邊的說明
+    univ_cache_path = BASE_DIR / "universe_cache.json"
+    if univ_cache_path.exists():
+        (SITE_DIR / "universe_cache.json").write_text(
+            univ_cache_path.read_text(encoding="utf-8"), encoding="utf-8")
+
     # 服務條款／隱私權政策是獨立的靜態頁面（不是樣板產生的），原封不動複製進 site/
     for name in ("terms.html", "privacy.html"):
         src = BASE_DIR / name

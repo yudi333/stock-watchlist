@@ -396,9 +396,20 @@ __WEEKLY__
       if (holdings.length) renderHoldings();   // 换上盤中價格重新渲染
     } catch (e) { /* 抓不到就用收盤價，這是正常情況（例如非交易時段），不用提示 */ }
   }
+  // currentPrice()：給「判斷」用的（停損/停利建議、最高價追蹤）——抓不到即時報價就退回收盤價，
+  // 一定要回傳一個數字，不能是 null：README 本來就寫「停損以收盤價跌破為準，不是盤中價」，
+  // 用收盤價判斷才是對的；而且 null 拿去跟停損價比較（`null <= 停損價`）在 JS 裡會被當成
+  // `0 <= 停損價`，變成一定觸發的假「已停損」警報，不能讓這裡回傳 null。
   function currentPrice(hd, s) {
     const live = LIVE[hd.code];
     return live != null ? live : (s ? s.close : null);
+  }
+  // livePrice()：只給「現價」欄位「顯示」用——抓不到真正的盤中即時報價就回傳 null（畫面上
+  // 顯示「—」，不偷偷用收盤價冒充現價），跟上面 currentPrice() 的「判斷」用途分開；
+  // 建議文字（已達停損…）還是看 currentPrice()，不受這裡影響。
+  function livePrice(hd) {
+    const live = LIVE[hd.code];
+    return live != null ? live : null;
   }
   function peakOf(hd) { return hd.peak != null ? Math.max(hd.peak, hd.buyPrice) : hd.buyPrice; }
   function updatePeak(hd, s) {   // 用現有資料把「買進後最高價」補到最新：今天現價 + 最近 6 個交易日的歷史高點
@@ -530,7 +541,7 @@ __WEEKLY__
         el('th', { class: 'l' }, '趨勢與建議'), el('th', { class: 'l' }, ''));
       const rows = holdings.map(hd => {
         const s = BY[hd.code], stop = holdingStop(hd), target = holdingTarget(hd), v = holdingVerdict(hd, s);
-        const c = currentPrice(hd, s);
+        const c = livePrice(hd);   // 只給這裡顯示用，抓不到即時報價就是 null（顯示「—」），不冒充收盤價
         const pnl = c == null ? null : (c / hd.buyPrice - 1) * 100;
         return el('tr', { class: v.cls === 'st-stop' ? 'row-stop' : '' },
           el('td', { class: 'l' }, hd.code),

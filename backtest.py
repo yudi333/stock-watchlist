@@ -35,12 +35,13 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from stock_checker import fetch_history
+from stock_checker import BASE_DIR, fetch_history
 
 RESULT_COLS = ["結果", "結果日期", "實際報酬%", "持有天數"]
 # 追蹤期限（交易日）：超過這麼多天還沒進場/沒觸發停損停利，就不再繼續無限期等下去
 EXPIRE_DAYS = {"多重訊號": 60, "每日候選": 60, "每週候選": 120}
 OPEN_STATUSES = {"", "追蹤中", "尚未進場"}   # 這些狀態的列才需要重新檢查
+MIN_SAMPLE = 10   # 少於這個筆數的型態，樣本太少，勝率不穩定、不顯示，避免「3 戰 2 勝=67%」這種誤導
 
 
 def connect():
@@ -194,6 +195,65 @@ def backtest_sheet(sh, title, code_col, date_col):
     return changed, events
 
 
+def compute_signal_stats(sh):
+    """統計每一種訊號型態（型態欄位的完整文字，例如「訊號16 鏡射突破前高」）歷史上真正的
+    表現，回傳 {型態: {"n": 已定案筆數, "win": 停利筆數, "loss": 停損筆數,
+    "win_rate": 勝率%（樣本不足回傳 None）, "avg_return": 平均報酬%}}。
+
+    三個分頁（多重訊號／每日候選／每週候選）同名訊號合併一起算——同一種型態的判斷邏輯
+    一樣，只是出現在不同清單，分開算樣本數會太少。只算已經有終局結果的列（已停損／已停利／
+    過期未觸發），追蹤中、尚未進場、過期未進場（根本沒進場，無從判斷型態好不好）都跳過。
+
+    勝率的分母只有「已停損＋已停利」，過期未觸發不算進去（它不是贏也不是輸，算進去會
+    稀釋/扭曲勝率）；但平均報酬%三種都算，比較能反映「這個型態抱到底平均賺賠多少」。
+    樣本數低於 MIN_SAMPLE 時，win_rate 回傳 None（畫面上顯示「樣本不足」，不要硬湊一個
+    小樣本的百分比誤導人）。"""
+    import gspread
+    agg = {}   # 型態 -> {"win":0,"loss":0,"expired":0,"returns":[float]}
+    for title in ("多重訊號", "每日候選", "每週候選"):
+        try:
+            ws = sh.worksheet(title)
+        except gspread.WorksheetNotFound:
+            continue
+        values = ws.get_all_values()
+        if len(values) < 2:
+            continue
+        header = values[0]
+        # 訊號型態的欄名三個分頁不一樣：多重訊號叫「訊號」，每日／每週候選叫「型態」
+        # （見 sheets_log.py 的 SHEET_HEADERS），兩個都要認得，不然多重訊號那份會整個被跳過
+        kind_col = "型態" if "型態" in header else "訊號" if "訊號" in header else None
+        if kind_col is None or "結果" not in header or "實際報酬%" not in header:
+            continue
+        idx = {"kind": header.index(kind_col), "結果": header.index("結果"),
+               "實際報酬%": header.index("實際報酬%")}
+        for row in values[1:]:
+            row = row + [""] * (len(header) - len(row))
+            result, kind = row[idx["結果"]], row[idx["kind"]]
+            if not kind or result not in ("已停損", "已停利", "過期未觸發"):
+                continue
+            a = agg.setdefault(kind, {"win": 0, "loss": 0, "expired": 0, "returns": []})
+            if result == "已停利":
+                a["win"] += 1
+            elif result == "已停損":
+                a["loss"] += 1
+            else:
+                a["expired"] += 1
+            try:
+                a["returns"].append(float(row[idx["實際報酬%"]]))
+            except (ValueError, IndexError):
+                pass   # 這欄萬一是空字串或格式怪怪的，平均報酬%就少算這一筆，不讓整批失敗
+    stats = {}
+    for kind, a in agg.items():
+        resolved = a["win"] + a["loss"]
+        n = resolved + a["expired"]
+        stats[kind] = {
+            "n": n, "win": a["win"], "loss": a["loss"],
+            "win_rate": round(a["win"] / resolved * 100) if resolved >= MIN_SAMPLE else None,
+            "avg_return": round(sum(a["returns"]) / len(a["returns"]), 1) if a["returns"] else None,
+        }
+    return stats
+
+
 TITLE_ORDER = ["多重訊號", "每日候選", "每週候選"]   # 通知裡分組顯示的順序
 
 
@@ -264,6 +324,17 @@ def main():
             notify_stop_events(e1 + e2 + e3)
         except Exception as e:   # 通知失敗不該讓回測本身被當成失敗（結果已經寫進試算表了）
             print(f"[注意] 停損/停利通知發送時發生例外（{type(e).__name__}），略過。")
+        try:
+            # 統計每種訊號型態的歷史勝率，給網頁顯示「信心程度」用（見 README「訊號信心程度」）。
+            # 這次算完存在本機，今天 build_site.py 已經跑過、網站已經部署了，來不及影響今天，
+            # 跟 inst_history.json／universe_cache.json 同一套模式：明天 screener.py 開始跑時
+            # 再讀回去用，差一天不影響——勝率本來就是慢慢累積、不會一天內有感變化的東西。
+            stats = compute_signal_stats(sh)
+            (BASE_DIR / "signal_stats.json").write_text(
+                json.dumps(stats, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            print(f"訊號統計完成：{len(stats)} 種型態。")
+        except Exception as e:
+            print(f"[注意] 統計訊號勝率時發生例外（{type(e).__name__}），略過，不影響回測本身。")
     except Exception as e:
         print(f"[注意] 回測失敗（{type(e).__name__}：{e}），略過這次。完整錯誤：")
         traceback.print_exc()

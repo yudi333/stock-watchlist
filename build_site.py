@@ -137,6 +137,20 @@ def change_cell_html(s):
     return f"<span class='{cls}'>{pts:+,.2f}<br><small>{pct:+.1f}%</small></span>"
 
 
+def conf_class(pct):
+    """信心百分比對應的顏色，跟其他標籤共用同一組色碼：≥60% 強（跟「可留意買進」同色）、
+    40~59% 中性、<40% 弱（跟「暫不買」同色）。"""
+    return "t-bull" if pct >= 60 else "t-weak" if pct < 40 else "t-hot"
+
+
+def conf_badge_html(conf):
+    """信心程度的小標籤 HTML；conf 可能是空字串/NaN（例如舊資料還沒有這欄），這時不顯示。"""
+    if conf is None or (isinstance(conf, float) and pd.isna(conf)) or conf == "":
+        return ""
+    pct = int(round(float(conf)))
+    return f"<span class='tag {conf_class(pct)}'>信心 {pct}%</span>"
+
+
 def picks_table(csv_name, by_code):
     """讀 candidates_*.csv，回傳表格 HTML。沒有檔案或沒有候選時顯示說明。
     by_code：{代號: stocks.json 裡的那筆記錄}，用來畫收盤價的漲跌停標記。"""
@@ -160,12 +174,13 @@ def picks_table(csv_name, by_code):
         f"<td class='stopc'>{r['停損價']:,.2f}<br><small>-{r['風險%']}%</small></td>"
         f"<td class='tpc'>{r['停利價']:,.2f}<br><small>+{r['報酬%']}%</small></td>"
         f"<td>{r.get('賺賠比', '')}</td>"
+        f"<td>{conf_badge_html(r.get('信心', ''))}</td>"
         f"<td class='reason'>{html.escape(str(r['理由']))}</td></tr>"
         for _, r in d.iterrows()
     )
     return ('<div class="tablewrap"><table class="picks"><thead><tr><th class="l">代號</th><th class="l">名稱</th>'
             '<th class="l">訊號</th><th>收盤</th><th>買進區間</th><th>停損價</th><th>停利價</th><th>賺賠比</th>'
-            '<th class="l">理由</th></tr></thead>'
+            '<th>信心</th><th class="l">理由</th></tr></thead>'
             f"<tbody>{rows}</tbody></table></div>")
 
 
@@ -186,7 +201,7 @@ def multi_signal_html(stocks):
         for n, st, right in found:
             lines = "".join(
                 f"<div class='sigline'><b>{html.escape(g['name'])}</b>"
-                f"<span class='tag t-mute'>{g['tf']}</span><br>"
+                f"<span class='tag t-mute'>{g['tf']}</span> {conf_badge_html(g.get('conf', ''))}<br>"
                 f"<small>買進 {g['lo']:,.2f}～{g['hi']:,.2f}（{POS_SHORT[g['pos']]}）　"
                 f"停損 <span class='stopc'>{g['stop']:,.2f}</span>（-{g['risk']}%）　"
                 f"停利 <span class='tpc'>{g['target']:,.2f}</span>（+{g['gain']}%）　"
@@ -244,6 +259,14 @@ def main():
     if univ_cache_path.exists():
         (SITE_DIR / "universe_cache.json").write_text(
             univ_cache_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # 每種訊號型態的歷史勝率：backtest.py 算好存在 BASE_DIR，一樣「讀線上、寫本機、下次
+    # build 再部署」——backtest.py 跑在 daily-update 最後面，今天才算出來的來不及影響今天
+    # 這次部署，明天 screener.py 開始跑時才會讀到，見 screener.py 的 load_signal_stats()
+    sig_stats_path = BASE_DIR / "signal_stats.json"
+    if sig_stats_path.exists():
+        (SITE_DIR / "signal_stats.json").write_text(
+            sig_stats_path.read_text(encoding="utf-8"), encoding="utf-8")
 
     # 服務條款／隱私權政策是獨立的靜態頁面（不是樣板產生的），原封不動複製進 site/
     for name in ("terms.html", "privacy.html"):

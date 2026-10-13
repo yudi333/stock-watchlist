@@ -852,7 +852,9 @@ __WEEKLY__
       el('div', { class: 'verdict ' + LV[s.level] }, el('b', {}, LVNAME[s.level] + '：'), s.advice, ' ', ...s.tags.map(t => el('span', { class: 'tag t-mute' }, t)))
     ];
     if (s.sigs.length) {
-      const th = ['週期', '訊號', '買進區間', '停損價', '停利價', '賺賠比', '理由'].map((h, i) => el('th', { class: i < 2 || i === 6 ? 'l' : '' }, h));
+      // 信心百分比的顏色，跟 build_site.py 的 conf_class() 同一套規則：≥60% 強、40~59% 中性、<40% 弱
+      const confClass = pct => pct >= 60 ? 't-bull' : pct < 40 ? 't-weak' : 't-hot';
+      const th = ['週期', '訊號', '買進區間', '停損價', '停利價', '賺賠比', '信心', '理由'].map((h, i) => el('th', { class: i < 2 || i === 7 ? 'l' : '' }, h));
       const rows = s.sigs.map(g => el('tr', {},
         el('td', { class: 'l' }, g.tf),
         el('td', { class: 'l' }, g.name, g.side === '左側' ? el('span', { class: 'tag t-hot', style: 'margin-left:6px' }, '左側') : null),
@@ -860,6 +862,7 @@ __WEEKLY__
         el('td', { class: 'stopc' }, num(g.stop), el('br'), el('small', {}, '-' + g.risk + '%')),
         el('td', { class: 'tpc' }, num(g.target), el('br'), el('small', {}, '+' + g.gain + '%')),
         el('td', {}, String(g.rr)),
+        el('td', {}, g.conf != null ? el('span', { class: 'tag ' + confClass(g.conf) }, `信心 ${g.conf}%`) : ''),
         el('td', { class: 'reason' }, g.reason)));
       parts.push(el('div', { class: 'tablewrap' }, el('table', { class: 'picks' }, el('thead', {}, el('tr', {}, th)), el('tbody', {}, rows))),
         el('div', { class: 'sub', style: 'margin:8px 0 0' }, '停損請以收盤價跌破為準。這是規則篩選，不是預測或投資建議。'));

@@ -31,6 +31,14 @@ MIN_PRICE = 20           # 股價低於這個數字的不看（太便宜的雞�
 MAX_PICKS = 12           # 每個清單最多列幾檔
 MAX_PER_SIGNAL = 4       # 同一種訊號最多列幾檔（避免被單一訊號洗版）
 
+# 每種訊號型態的歷史勝率（backtest.py 算的，見 load_signal_stats()）；main() 開始分析前
+# 讀一次存在這個全域變數，evaluate() 直接讀，不用每次呼叫都多傳一個參數穿過
+# snapshot()/evaluate()/build_trade() 這條呼叫鏈（光是每檔股票的歷史回看就會呼叫
+# evaluate() 7 次，一次分析下來是幾萬次呼叫，沒必要每次都多傳一份）。
+SIGNAL_STATS = {}
+MIN_SIGNAL_SAMPLE = 10   # 樣本數門檻，純粹給畫面上的文字說明用，實際門檻由 backtest.py 的
+                         # MIN_SAMPLE 決定（win_rate 是 None 還是數字）——兩邊數字要一致
+
 # 兩組參數：日線看短波段，週線看中期趨勢（週線的「根」= 週）
 DAILY = dict(
     label="日線", unit="日", min_bars=130, ma_slow=60, up_lookback=5, pull_mas=(10, 20, 60),
@@ -87,6 +95,21 @@ def load_universe_cache():
     抓不到就回傳空字典，當作「還沒有快取」，不會讓更新失敗。"""
     try:
         r = requests.get(f"{SITE_URL}/universe_cache.json?t={int(time.time())}", headers=HEADERS, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return {}
+
+
+def load_signal_stats():
+    """讀線上目前每種訊號型態的歷史勝率（backtest.py 算的，同一套「讀線上、寫本機、下次
+    build 再部署」模式）：{型態: {"n", "win", "loss", "win_rate", "avg_return"}}。
+    給 build_trade() 算「信心程度」用，純粹是加分資訊、不影響買進區間/停損/停利。
+    抓不到（還沒有這份資料、或這次請求失敗）就回傳空字典，所有訊號的信心程度都退回
+    只看技術面加分項，不會讓分析失敗。"""
+    try:
+        r = requests.get(f"{SITE_URL}/signal_stats.json?t={int(time.time())}", headers=HEADERS, timeout=20)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -313,17 +336,40 @@ def evaluate(df, p):
     if main["extra"] and not main["extra"].startswith("盤整"):
         notes.append(main["extra"])
 
-    bonus = 3 * aligned + 1 * kd_cross + 1 * (x.vol_ratio >= 1.5)
-    is_left = main["side"] == "左側"
+    # 信心程度（百分比）：以「這一種型態」歷史上的真實勝率（SIGNAL_STATS，backtest.py 算的，
+    # 每種型態不一樣，要逐一對 matches 裡每個訊號分開算，不是只算 main 那個）當基準，樣本數
+    # 不夠（未滿 MIN_SIGNAL_SAMPLE 筆）或這種型態還沒有任何歷史紀錄，就用 50%（中性、不predetermine
+    # 好壞）當基準；再依「現在」這根K棒的技術面佐證微調幾個百分點——均線多頭排列/KD黃金交叉
+    # 或同向向上/量能放大各 +3pp，同時符合幾種其他訊號每種 +2pp（最多 +4pp）。這個百分比
+    # 是「歷史勝率 + 技術面加分」混合算出來的估計值，不是精算過的成功機率，技術面加分的權重
+    # 是這支程式自訂的，不是統計推導出來的，理由欄會註明算法基準讓人自己判斷要多信。
+    # 最後夾在 5~95% 之間，不宣稱「幾乎不可能」或「幾乎穩賺」這種過頭的確定性。
+    nudge = 3 * aligned + 3 * (kd_cross or kd_up) + 3 * (x.vol_ratio >= 1.5)
     for t in matches:
         t["pos"] = position(x.c[-1], t["zone_lo"], t["zone_hi"])
+        n = nudge + 2 * min(len(matches) - 1, 2)   # len(matches)-1 = 同時符合的「其他」訊號種類數
+        stat = SIGNAL_STATS.get(t["signal"])
+        win_rate = stat.get("win_rate") if stat else None
+        if win_rate is not None:
+            base = win_rate
+            t["conf_note"] = f"信心程度以這個型態的歷史勝率 {win_rate}%（{stat['n']} 次中 {stat['win']} 次停利）為基準，依技術面加分微調"
+        else:
+            base = 50
+            extra = f"（僅 {stat['n']} 次，未滿 {MIN_SIGNAL_SAMPLE} 次）" if stat and stat.get("n", 0) > 0 else "（還沒有歷史紀錄）"
+            t["conf_note"] = f"信心程度：這個型態歷史樣本還不足{extra}，以 50% 為基準依技術面加分微調，僅供參考"
+        t["confidence"] = max(5, min(95, round(base + n)))
+    if main["conf_note"]:
+        notes.append(main["conf_note"])
+
+    bonus = 3 * aligned + 1 * kd_cross + 1 * (x.vol_ratio >= 1.5)
+    is_left = main["side"] == "左側"
     return {
         "型態": main["signal"], "側別": main["side"], "收盤": round(x.c[-1], 2),
         "買進下限": round(main["zone_lo"], 2), "買進上限": round(main["zone_hi"], 2),
         "現價位置": POS_TEXT[main["pos"]], "停損價": round(main["stop"], 2),
         "停利價": round(main["target"], 2), "風險%": round(main["risk_pct"], 1),
         "報酬%": round(main["reward_pct"], 1), "賺賠比": round(main["rr"], 1),
-        "RSI": round(rsi), "量比": round(x.vol_ratio, 2),
+        "RSI": round(rsi), "量比": round(x.vol_ratio, 2), "信心": main["confidence"],
         "距52週高%": round((x.c[-1] / high52 - 1) * 100, 1),
         "理由": "；".join([main["reason"]] + notes),
         # 右側先；現價在區間內的先於「高於區間」；優先度高先；加分多先
@@ -464,8 +510,9 @@ def signal_rows(tf, res):
     return [dict(tf=tf, name=t["signal"], side=t["side"], lo=r2(t["zone_lo"]), hi=r2(t["zone_hi"]), pos=t["pos"],
                  stop=r2(t["stop"]),
                  target=r2(t["target"]), rr=round(t["rr"], 1), risk=round(t["risk_pct"], 1),
-                 gain=round(t["reward_pct"], 1),
-                 reason=t["reason"] + ("；" + t["extra"] if t["extra"] and not t["extra"].startswith("盤整") else ""))
+                 gain=round(t["reward_pct"], 1), conf=t["confidence"],
+                 reason=t["reason"] + ("；" + t["extra"] if t["extra"] and not t["extra"].startswith("盤整") else "")
+                        + ("；" + t["conf_note"] if t["conf_note"] else ""))
             for t in res["_matches"]]
 
 
@@ -592,6 +639,9 @@ def sanitize(obj):
 
 
 def main():
+    global SIGNAL_STATS
+    SIGNAL_STATS = load_signal_stats()   # 失敗就是空字典，所有訊號的信心程度退回只看技術面
+    print(f"讀到 {len(SIGNAL_STATS)} 種訊號型態的歷史統計，給信心程度用。")
     try:
         watchlist, _, _, _ = load_config()
         stocks = get_universe()
@@ -680,7 +730,7 @@ def main():
         if out.empty:
             out = pd.DataFrame(columns=["代號", "名稱", "Yahoo代號", "資料日期", "型態", "側別", "收盤",
                                         "買進下限", "買進上限", "現價位置", "停損價", "停利價", "風險%", "報酬%", "賺賠比", "RSI", "量比",
-                                        "距52週高%", "理由"])
+                                        "信心", "距52週高%", "理由"])
         out.to_csv(BASE_DIR / f"candidates_{key}.csv", index=False, encoding="utf-8-sig")
         print(f"\n【{title}候選】{len(out)} 檔")
         for _, r in out.iterrows():

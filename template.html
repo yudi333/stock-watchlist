@@ -849,6 +849,20 @@ __WEEKLY__
         metric('今日', s.prev != null ? `${signedNum(s.close - s.prev)}　${signed(s.chg)}` : signed(s.chg), dir(s.chg)),
         metric('離季線', signed(s.vs60), dir(s.vs60)),
         metric('RSI', String(s.rsi)), metric('量比', s.vr + ' 倍'), metric('距 52 週高', signed(s.fh))),
+      // 盤中提醒：下面的訊號判斷整套都是用收盤價算的（型態偵測需要完整的一根K棒，盤中資料
+      // 還沒走完，不能拿來重新判斷型態，見 README「訊號意思」），但現在如果剛好有即時報價，
+      // 至少讓人知道現在的價格跟分析基準差多少，自己評估訊號還適不適用——不是重新分析，
+      // 只是誠實標出「你看到的判斷是用哪個價格算的，跟現在差多少」。
+      (() => {
+        const live = LIVE[code];
+        if (live == null) return null;
+        const diff = (live / s.close - 1) * 100;
+        return el('div', { class: 'market', style: 'border-color:var(--warn)' },
+          el('b', {}, '盤中提醒：'), `現在即時報價 ${num(live)}`, LIVE_TIME ? `（${LIVE_TIME}）` : '', '，',
+          '較下面分析用的收盤價 ', el('b', {}, num(s.close)), ' ',
+          el('span', { class: dir(diff) }, signed(diff)),
+          '。下面的訊號判斷、買進區間都是用收盤價算的，盤中價格可能已經不同，請自行評估是否仍然適用。');
+      })(),
       el('div', { class: 'verdict ' + LV[s.level] }, el('b', {}, LVNAME[s.level] + '：'), s.advice, ' ', ...s.tags.map(t => el('span', { class: 'tag t-mute' }, t)))
     ];
     if (s.sigs.length) {

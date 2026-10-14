@@ -274,23 +274,18 @@ def main():
         if src.exists():
             (SITE_DIR / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
-    # App 圖示（icons/）：給 iOS「加入主畫面」跟瀏覽器分頁用，二進位檔案不能用 write_text，
-    # 整個資料夾原封不動複製進 site/icons/
-    # 這段本機測試一直正常，但線上部署後 icons/*.png 卻一直 404——先加診斷訊息，確認是
-    # icons_src.exists() 判斷為 False（例如 checkout 沒帶到這個資料夾），還是真的有複製
-    # 但 upload-pages-artifact 沒有把子資料夾一起包進去。
+    # App 圖示：給 iOS「加入主畫面」跟瀏覽器分頁用，二進位檔案不能用 write_text。
+    # 原本複製進 site/icons/ 這個子資料夾，本機測試、甚至線上 build_site.py 執行時的診斷
+    # 訊息都證實檔案真的有複製成功，但實際部署後 icons/*.png 一直是 404——問題出在
+    # actions/upload-pages-artifact 或 actions/deploy-pages 處理子資料夾的某個環節，
+    # 不是我們的程式能修的地方。改成直接放在 site/ 根目錄（不再包一層子資料夾），
+    # 其他放在根目錄的檔案（terms.html、quotes.json…）都部署得很正常，用這個方式繞開。
+    # 原始檔案還是放在本機的 icons/ 資料夾（repo 結構維持整齊），只有「部署到哪裡」改掉。
     icons_src = BASE_DIR / "icons"
-    print(f"[診斷] icons_src={icons_src}，exists={icons_src.exists()}")
     if icons_src.exists():
-        icons_dst = SITE_DIR / "icons"
-        icons_dst.mkdir(exist_ok=True)
-        copied = []
         for f in icons_src.iterdir():
             if f.is_file():
-                (icons_dst / f.name).write_bytes(f.read_bytes())
-                copied.append(f.name)
-        print(f"[診斷] 複製了 {len(copied)} 個圖示檔案：{copied}")
-        print(f"[診斷] site/icons/ 底下實際有：{sorted(p.name for p in icons_dst.iterdir())}")
+                (SITE_DIR / f.name).write_bytes(f.read_bytes())
 
     # 盤中報價（quotes.json）只有 intraday-quotes.yml 會更新，這裡（daily.yml）不會重算；
     # 沒有這一段的話，daily.yml 每次發布都會把它整個蓋掉，要等到下一次 intraday 執行

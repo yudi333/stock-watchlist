@@ -58,16 +58,23 @@ def make_message():
         pass
     by_code = {s["code"]: s for s in stocks["stocks"]} if stocks else {}
 
-    def stock_line(code, name):
-        """代號＋名稱＋收盤＋（跟前一天比）漲跌點數與漲跌幅；stocks.json 只存了漲跌幅（chg），
-        沒有存漲跌點數，用「收盤 ÷ (1+漲跌幅) = 前一天收盤」反推算出點數，四捨五入前的
-        誤差極小，這裡只是通知摘要，不影響網頁上實際的價格與訊號判斷。"""
+    def stock_line(code, name, conf=None):
+        """代號＋名稱＋收盤＋（跟前一天比）漲跌點數與漲跌幅＋信心程度；stocks.json 只存了
+        漲跌幅（chg），沒有存漲跌點數，用「收盤 ÷ (1+漲跌幅) = 前一天收盤」反推算出點數，
+        四捨五入前的誤差極小，這裡只是通知摘要，不影響網頁上實際的價格與訊號判斷。
+        conf：信心百分比（見 screener.py 的 evaluate()），沒有值（例如查無資料）就不顯示。"""
         s = by_code.get(code)
         if not s:
             return f"・{code} {name}"
         close, pct = s["close"], s["chg"]
         prev = close / (1 + pct / 100) if pct != -100 else close
-        return f"・{code} {name}　{close:.2f}　{badge(close - prev, pct)}"
+        conf_txt = ""
+        if conf not in (None, ""):
+            try:
+                conf_txt = f"　信心{int(round(float(conf)))}%"
+            except (ValueError, TypeError):
+                pass
+        return f"・{code} {name}　{close:.2f}　{badge(close - prev, pct)}{conf_txt}"
 
     date = (stocks or {}).get("date") or (market or {}).get("date") or "-"
     lines = [f"日期：{date}"]
@@ -86,14 +93,17 @@ def make_message():
                  if len({g["name"] for g in s["sigs"] if g["side"] == "右側"}) >= 2
                  and "過熱，不追" not in s["tags"]]
         lines.append(f"多重訊號：{len(multi)} 檔")
-        lines += [stock_line(s["code"], s["name"]) for s in multi] or ["（無）"]
+        # 一檔股票可能同時符合好幾個右側訊號、各自信心不同，通知摘要只列一行，取其中最高的
+        multi_conf = {s["code"]: max((g["conf"] for g in s["sigs"] if g["side"] == "右側" and g.get("conf") is not None),
+                                     default=None) for s in multi}
+        lines += [stock_line(s["code"], s["name"], multi_conf.get(s["code"])) for s in multi] or ["（無）"]
     else:
         lines.append("多重訊號：（資料產生失敗）")
 
     lines.append("")
     daily = read_csv("candidates_daily.csv")
     lines.append(f"每日候選：{len(daily)} 檔")
-    lines += [stock_line(r["代號"], r["名稱"]) for r in daily] or ["（無）"]
+    lines += [stock_line(r["代號"], r["名稱"], r.get("信心")) for r in daily] or ["（無）"]
 
     lines += ["", "僅為資料分析，不是投資建議；自負盈虧"]
     return "\n".join(lines)

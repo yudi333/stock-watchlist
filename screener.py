@@ -21,6 +21,7 @@ import requests
 import yfinance as yf
 
 import institutional
+from backtest import MIN_SAMPLE as MIN_SIGNAL_SAMPLE
 from signals import DETECTORS, Ctx, build_trade, calc_kd
 from stock_checker import BASE_DIR, calc_rsi, drop_unfinished_today, judge, load_config
 
@@ -36,8 +37,10 @@ MAX_PER_SIGNAL = 4       # 同一種訊號最多列幾檔（避免被單一訊�
 # snapshot()/evaluate()/build_trade() 這條呼叫鏈（光是每檔股票的歷史回看就會呼叫
 # evaluate() 7 次，一次分析下來是幾萬次呼叫，沒必要每次都多傳一份）。
 SIGNAL_STATS = {}
-MIN_SIGNAL_SAMPLE = 10   # 樣本數門檻，純粹給畫面上的文字說明用，實際門檻由 backtest.py 的
-                         # MIN_SAMPLE 決定（win_rate 是 None 還是數字）——兩邊數字要一致
+# MIN_SIGNAL_SAMPLE 直接從 backtest.py import（見上方），不要在這裡另外定義一份同樣的數字——
+# 這個門檻實際決定 win_rate 是 None 還是數字的地方就在 backtest.py，這裡只是拿同一個值
+# 給文字說明用，兩份數字各自維護的話，改一邊忘記改另一邊，顯示出來的說明文字會跟實際
+# 行為對不上。
 
 # 兩組參數：日線看短波段，週線看中期趨勢（週線的「根」= 週）
 DAILY = dict(
@@ -336,18 +339,22 @@ def evaluate(df, p):
     if main["extra"] and not main["extra"].startswith("盤整"):
         notes.append(main["extra"])
 
+    # 技術面加分：均線多頭排列/KD黃金交叉或同向向上/量能放大各 +3，同時符合幾種其他訊號
+    # 每種 +2（最多 +4）——這組分數同時給兩個地方用，確保「要不要被選進候選股」（下面的
+    # _sort 排序）跟「信心百分比」（下面的迴圈）是同一套標準，不是兩組各自為政的權重
+    # （這兩個以前分開寫、權重還不一樣，比較過也修掉了，不是忘記刪的舊代碼）。
+    nudge = 3 * aligned + 3 * (kd_cross or kd_up) + 3 * (x.vol_ratio >= 1.5) \
+        + 2 * min(len(matches) - 1, 2)   # len(matches)-1 = 同時符合的「其他」訊號種類數
+
     # 信心程度（百分比）：以「這一種型態」歷史上的真實勝率（SIGNAL_STATS，backtest.py 算的，
     # 每種型態不一樣，要逐一對 matches 裡每個訊號分開算，不是只算 main 那個）當基準，樣本數
-    # 不夠（未滿 MIN_SIGNAL_SAMPLE 筆）或這種型態還沒有任何歷史紀錄，就用 50%（中性、不predetermine
-    # 好壞）當基準；再依「現在」這根K棒的技術面佐證微調幾個百分點——均線多頭排列/KD黃金交叉
-    # 或同向向上/量能放大各 +3pp，同時符合幾種其他訊號每種 +2pp（最多 +4pp）。這個百分比
-    # 是「歷史勝率 + 技術面加分」混合算出來的估計值，不是精算過的成功機率，技術面加分的權重
-    # 是這支程式自訂的，不是統計推導出來的，理由欄會註明算法基準讓人自己判斷要多信。
-    # 最後夾在 5~95% 之間，不宣稱「幾乎不可能」或「幾乎穩賺」這種過頭的確定性。
-    nudge = 3 * aligned + 3 * (kd_cross or kd_up) + 3 * (x.vol_ratio >= 1.5)
+    # 不夠（未滿 MIN_SIGNAL_SAMPLE 筆）或這種型態還沒有任何歷史紀錄，就用 50%（中性、不預設
+    # 好壞）當基準；再加上面的技術面加分。這個百分比是「歷史勝率 + 技術面加分」混合算出來的
+    # 估計值，不是精算過的成功機率，技術面加分的權重是這支程式自訂的，不是統計推導出來的，
+    # 理由欄會註明算法基準讓人自己判斷要多信。最後夾在 5~95% 之間，不宣稱「幾乎不可能」
+    # 或「幾乎穩賺」這種過頭的確定性。
     for t in matches:
         t["pos"] = position(x.c[-1], t["zone_lo"], t["zone_hi"])
-        n = nudge + 2 * min(len(matches) - 1, 2)   # len(matches)-1 = 同時符合的「其他」訊號種類數
         stat = SIGNAL_STATS.get(t["signal"])
         win_rate = stat.get("win_rate") if stat else None
         if win_rate is not None:
@@ -357,11 +364,10 @@ def evaluate(df, p):
             base = 50
             extra = f"（僅 {stat['n']} 次，未滿 {MIN_SIGNAL_SAMPLE} 次）" if stat and stat.get("n", 0) > 0 else "（還沒有歷史紀錄）"
             t["conf_note"] = f"信心程度：這個型態歷史樣本還不足{extra}，以 50% 為基準依技術面加分微調，僅供參考"
-        t["confidence"] = max(5, min(95, round(base + n)))
+        t["confidence"] = max(5, min(95, round(base + nudge)))
     if main["conf_note"]:
         notes.append(main["conf_note"])
 
-    bonus = 3 * aligned + 1 * kd_cross + 1 * (x.vol_ratio >= 1.5)
     is_left = main["side"] == "左側"
     return {
         "型態": main["signal"], "側別": main["side"], "收盤": round(x.c[-1], 2),
@@ -373,7 +379,7 @@ def evaluate(df, p):
         "距52週高%": round((x.c[-1] / high52 - 1) * 100, 1),
         "理由": "；".join([main["reason"]] + notes),
         # 右側先；現價在區間內的先於「高於區間」；優先度高先；加分多先
-        "_sort": is_left * 1000 + (main["pos"] != "in") * 200 + main["prio"] * 10 - bonus,
+        "_sort": is_left * 1000 + (main["pos"] != "in") * 200 + main["prio"] * 10 - nudge,
         "_matches": matches,
     }
 

@@ -43,6 +43,15 @@ EXPIRE_DAYS = {"多重訊號": 60, "每日候選": 60, "每週候選": 120}
 OPEN_STATUSES = {"", "追蹤中", "尚未進場"}   # 這些狀態的列才需要重新檢查
 MIN_SAMPLE = 10   # 少於這個筆數的型態，樣本太少，勝率不穩定、不顯示，避免「3 戰 2 勝=67%」這種誤導
 
+# 結果欄一旦定案（已停損/已停利），整列填滿底色，一眼就看得出哪些已經結束、不用再追——
+# 跟台股「紅漲綠跌」一致：已停利（賺錢）用紅、已停損（賠錢）用綠，是 Google 試算表內建色盤
+# 裡「淺紅色 3」「淺綠色 3」的 RGB 值（0~1 之間，不是 0~255，格式比照 sheets_log.py 的
+# FILL_WHITE/FILL_GRAY）。
+RESULT_FILL = {
+    "已停利": {"red": 244 / 255, "green": 204 / 255, "blue": 204 / 255},   # 淺紅色 3
+    "已停損": {"red": 217 / 255, "green": 234 / 255, "blue": 211 / 255},   # 淺綠色 3
+}
+
 
 def connect():
     key_json = os.environ.get("GOOGLE_SHEETS_KEY")
@@ -142,6 +151,7 @@ def backtest_sheet(sh, title, code_col, date_col):
     expire_days = EXPIRE_DAYS[title]
     cache = {}          # 代號 -> DataFrame，同一檔股票在同一次執行裡只抓一次
     updates = []         # gspread batch_update 用
+    colors = []          # gspread batch_format 用：已停損/已停利整列填色
     events = []          # 這次新產生的已停損/已停利，給 Telegram 另外通知用
     checked, changed = 0, 0
     for r in range(1, len(values)):
@@ -189,8 +199,13 @@ def backtest_sheet(sh, title, code_col, date_col):
                 "name": row[idx["名稱"]] if "名稱" in idx else "",
                 "result": 新結果, "pct": 報酬, "days": 天數, "buy_date": 買入日期,
             })
+            colors.append({"range": f"{gspread.utils.rowcol_to_a1(r + 1, 1)}:"
+                                     f"{gspread.utils.rowcol_to_a1(r + 1, len(header))}",
+                            "format": {"backgroundColor": RESULT_FILL[新結果]}})
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")
+    if colors:
+        ws.batch_format(colors)
     print(f"{title}：檢查 {checked} 列，更新 {changed} 列")
     return changed, events
 

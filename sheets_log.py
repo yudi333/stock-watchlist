@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from backtest import RESULT_COLS   # ["結果","結果日期","實際報酬%","持有天數"]，backtest.py 自己管理、
+                                    # 附加在每日/每週候選、多重訊號這幾個分頁標題列最後面的欄位
 from build_site import POS_SHORT   # {"in":"區間內","above":"高於區間","below":"低於區間"}，跟網頁共用同一份對照表
 
 BASE_DIR = Path(__file__).parent
@@ -136,16 +138,26 @@ def next_fill_color(sh, title):
 
 
 def ensure_header(ws, title):
-    """確保分頁第一列是最新的 SHEET_HEADERS[title]。分頁通常老早就建立過了，欄位定義改了
-    （例如新增「信心」欄）不會自動反映到既有分頁的標題列上——之前就是這樣才踩到欄位位移的
-    bug：標題列是舊的（少一欄），資料列是新的（多一欄，還插在中間不是加在最後面），兩者
-    對不上，後面幾欄的資料全部顯示在錯的標題底下。這裡直接比對、不一樣就整列覆寫成最新版。
-    注意：這只保證「標題列」本身是新的，不會去搬動已經寫進去的舊資料列——欄位定義改過之後
-    那幾天寫入的資料，舊資料本身還是位移的，要自己手動核對/修正那幾天的資料。"""
+    """確保分頁第一列、「我們自己管的」這一段（SHEET_HEADERS[title]）是最新的。分頁通常
+    老早就建立過了，欄位定義改了（例如新增「信心」欄）不會自動反映到既有分頁的標題列上——
+    之前就是這樣才踩到欄位位移的 bug：標題列是舊的（少一欄），資料列是新的（多一欄，還
+    插在中間不是加在最後面），兩者對不上，後面幾欄的資料全部顯示在錯的標題底下。
+
+    不是整列覆寫、也不是「取前 N 欄」這種用長度位置去切——backtest.py 的 ensure_result_cols()
+    會在這些分頁的標題列後面自己加「結果／結果日期／實際報酬%／持有天數」這 4 欄，不在
+    SHEET_HEADERS 的定義範圍內；原本想用「header[:len(want)]」切出我們管的那一段、保留
+    後面的尾巴，但舊標題列本來就是少一欄（信心上線前的狀態），用新版的 len(want) 去切
+    舊版的 header，位置本來就對不齊，會把 RESULT_COLS 的第一欄切掉、憑空消失（本機測試
+    拿貼近線上實際狀況的假資料測才抓到，還沒真的跑到線上，改掉了才推送）。改成直接按
+    「名字」找出 header 裡屬於 RESULT_COLS 的欄位（不管它們現在在什麼位置），原封不動
+    保留、接在 SHEET_HEADERS 後面，其餘全部視為我們自己管的，整段覆寫成最新版——不管
+    標題列目前處在哪種中間狀態都能正確修好。"""
     header = ws.row_values(1)
     want = SHEET_HEADERS[title]
-    if header != want:
-        ws.update([want], "1:1")
+    tail = [c for c in header if c in RESULT_COLS]   # backtest.py 管的那幾欄，保留原本的順序
+    new_header = want + tail
+    if header != new_header:
+        ws.update([new_header], "1:1")
 
 
 def sync_rows_top(sh, title, rows):

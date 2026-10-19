@@ -11,9 +11,11 @@ sheets_log.py 的 ensure_header() 已經修好「標題列」本身，但這支�
 正確位置，才會重新對齊。10/13 之後寫入的資料本來就已經是新格式，不用動。
 
 判斷一列是不是舊格式，不是用「欄位數量」（gspread 回傳的列，尾端空字串有沒有被補齊
-不保證一致，用長度判斷不可靠），改用「Yahoo代號」那一欄現在實際顯示的內容是不是像
-股票代號（例如 2330.TW）來判斷——像代號格式，代表這列已經對齊，不用動；不像，代表
-這列目前錯位（代號欄現在顯示的其實是理由的文字，或根本是空的），需要修正。
+不保證一致，用長度判斷不可靠；而且這幾個分頁的標題列後面可能還接著 backtest.py 自己
+管理的「結果/結果日期/實際報酬%/持有天數」4 欄，長度會因列而異，用長度猜更不準），
+改用「新格式裡 Yahoo代號 該在的固定位置，這一列那個位置現在是不是像股票代號」來判斷——
+像代號格式，代表已經對齊，不用動；不像，才進一步確認是不是舊格式（少一欄）的典型樣子，
+是的話才修正，兩種都不像的列不猜，直接列出來讓人自己檢查。
 
 用法：
   python repair_sheet_shift.py          # 預覽模式，只印出會修改哪些列，不會真的寫入
@@ -40,30 +42,36 @@ def strip_trailing_empty(row):
     return r
 
 
-def plan_fixes(header, values):
-    """算出哪些列需要修正，回傳 [(列號（1-based，對應試算表實際列數）, 修正後的完整列內容)]。
+def plan_fixes(canonical_header, values):
+    """算出哪些列需要修正，回傳 [(列號（1-based，對應試算表實際列數）, 修正後的內容或 None, 原始內容)]。
     不碰 Google 試算表，純粹算而已，方便先用假資料測試這段邏輯對不對。
 
-    判斷依據不是看這一列「自己的最後一個值」長怎樣——舊格式（少一欄）跟新格式（對齊）的
-    最後一個值本來就都是 Yahoo代號，兩種格式單看最後一個值完全沒辦法分辨（這是第一版
-    腳本寫錯、本機測試時才抓到的地方）。真正該看的是「header 現在認定 Yahoo代號應該在
-    哪個位置（最後一欄，index = len(header)-1）」，這一列那個位置實際有沒有值：
-    新格式（長度剛好等於 header）在那個位置本來就有東西；舊格式（長度少一欄）那個位置
-    根本不存在（超出這一列的範圍），一定抓不到有效的代號格式。"""
-    conf_idx = header.index("信心")
-    yahoo_pos = len(header) - 1
+    canonical_header 一定要傳 SHEET_HEADERS[title]（sheets_log.py 自己管的那 20 欄），
+    不能傳從試算表讀回來的完整標題列——這幾個分頁的標題列後面可能還接著 backtest.py
+    自己管理、附加在後面的「結果/結果日期/實際報酬%/持有天數」，不在這支腳本要處理的
+    範圍內，用完整標題列的長度去定位 Yahoo代號 的位置會抓到結果欄那邊去，判斷整批都會
+    錯（第一版就是犯了這個錯，拿接近真實的假資料測才抓到）。
+
+    判斷依據：直接檢查「新格式裡 Yahoo代號 該在的位置」（conf_idx+3，信心 已經在正確
+    位置時 Yahoo代號 緊接在距52週高%/理由後面）這一列那個位置有沒有放著看起來像代號的
+    內容——有，代表已經是新格式、對齊了，不用動（不管後面接不接 backtest 的結果欄，
+    這個位置都不受影響）。不是的話，改檢查「舊格式裡 Yahoo代號 該在的位置」（conf_idx+2，
+    少了信心那一欄）——是，代表確認是舊格式，要在 conf_idx 插入空字串修正；兩個位置
+    都不像代號格式，代表這列本身可能有別的問題，列出來讓人自己檢查，不要用猜的。"""
+    conf_idx = canonical_header.index("信心")
+    yahoo_pos_new = conf_idx + 3   # 新格式（含信心）：...,信心,距52週高%,理由,Yahoo代號
+    yahoo_pos_old = conf_idx + 2   # 舊格式（不含信心）：...,距52週高%,理由,Yahoo代號
     fixes = []
     for i, row in enumerate(values[1:], start=2):   # 從第 2 列開始（跳過標題），i = 試算表實際列號
         real = strip_trailing_empty(row)
         if not real:
             continue   # 整列都是空的，跳過
-        val_at_yahoo_slot = real[yahoo_pos].strip() if yahoo_pos < len(real) else ""
-        if YAHOO_RE.match(val_at_yahoo_slot):
-            continue   # header 認定的 Yahoo代號位置，現在就有效的代號格式，已經對齊，不用動
-        if len(real) != conf_idx + 3:
-            # 正常的舊格式少一欄，應該剛好是 conf_idx + 3（信心之後還有 距52週高%/理由/Yahoo代號
-            # 這 3 欄）；長度對不上代表這列可能本來就有問題（例如理由裡剛好帶了類似代號的文字
-            # 但其實沒對齊，或資料本身就不完整），不要用猜的，列出來讓人自己看
+        at_new = real[yahoo_pos_new].strip() if yahoo_pos_new < len(real) else ""
+        if YAHOO_RE.match(at_new):
+            continue   # 新格式該有 Yahoo代號 的位置，現在就有有效的代號格式，已經對齊，不用動
+        at_old = real[yahoo_pos_old].strip() if yahoo_pos_old < len(real) else ""
+        if not YAHOO_RE.match(at_old):
+            # 兩個位置都抓不到像代號的內容，不是這支腳本處理得了的典型位移問題，列出來讓人自己看
             fixes.append((i, None, real))
             continue
         fixed = real[:conf_idx] + [""] + real[conf_idx:]
@@ -84,15 +92,14 @@ def main():
             print(f"{title}：分頁不存在，跳過。")
             continue
 
-        header = ws.row_values(1)
         want = SHEET_HEADERS[title]
-        if header != want:
+        header = ws.row_values(1)
+        if header[:len(want)] != want:
             print(f"{title}：標題列還不是最新版本，先更新標題列。")
             ensure_header(ws, title)
-            header = want
 
         values = ws.get_all_values()
-        fixes = plan_fixes(header, values)
+        fixes = plan_fixes(want, values)   # 一定傳 SHEET_HEADERS 的版本，不是讀回來的完整標題列（可能還接著結果欄）
         need_manual = [f for f in fixes if f[1] is None]
         need_fix = [f for f in fixes if f[1] is not None]
 
@@ -109,9 +116,12 @@ def main():
             print(f"  修正後：{fixed0}")
 
         if need_fix and apply:
-            for i, fixed, _ in need_fix:
-                rng = f"A{i}:{gspread.utils.rowcol_to_a1(i, len(fixed))}"
-                ws.update([fixed], rng, value_input_option="USER_ENTERED")
+            # 一列一列分開呼叫 API 會撞到 Google 試算表「每分鐘最多幾十次寫入」的速率限制
+            # （實測撞到過：128+133 列，一列一次 update() 跑到一半就被 429 擋下來）。
+            # 改成全部包進同一次 batch_update()，不管有幾百列都只算一次 API 呼叫。
+            data = [{"range": f"A{i}:{gspread.utils.rowcol_to_a1(i, len(fixed))}", "values": [fixed]}
+                    for i, fixed, _ in need_fix]
+            ws.batch_update(data, value_input_option="USER_ENTERED")
             print(f"{title}：已修正 {len(need_fix)} 列。")
         elif need_fix:
             print(f"{title}：預覽模式，沒有真的寫入。加 --apply 參數才會套用。")

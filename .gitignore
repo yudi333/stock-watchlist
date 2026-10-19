@@ -14,3 +14,8 @@ inst_history.json
 universe_cache.json
 signal_stats.json
 quotes.json
+*.json.key
+# Google 服務帳號金鑰（真正的密碼，不能進版控）：git 的 .gitignore 不支援行尾註解，
+# # 一定要是整行的開頭才會被當成註解，寫在規則後面會被當成規則本身的一部分、完全不會生效
+# （這裡本身就是踩過這個坑才改成這樣寫的）。
+distocks-*.json

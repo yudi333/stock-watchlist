@@ -135,6 +135,19 @@ def next_fill_color(sh, title):
     return _color_for(this_name)
 
 
+def ensure_header(ws, title):
+    """確保分頁第一列是最新的 SHEET_HEADERS[title]。分頁通常老早就建立過了，欄位定義改了
+    （例如新增「信心」欄）不會自動反映到既有分頁的標題列上——之前就是這樣才踩到欄位位移的
+    bug：標題列是舊的（少一欄），資料列是新的（多一欄，還插在中間不是加在最後面），兩者
+    對不上，後面幾欄的資料全部顯示在錯的標題底下。這裡直接比對、不一樣就整列覆寫成最新版。
+    注意：這只保證「標題列」本身是新的，不會去搬動已經寫進去的舊資料列——欄位定義改過之後
+    那幾天寫入的資料，舊資料本身還是位移的，要自己手動核對/修正那幾天的資料。"""
+    header = ws.row_values(1)
+    want = SHEET_HEADERS[title]
+    if header != want:
+        ws.update([want], "1:1")
+
+
 def sync_rows_top(sh, title, rows):
     """插入在標題列（第 1 列）正下方，日期新的一直往上疊，最新一批永遠在最上面。
 
@@ -153,7 +166,7 @@ def sync_rows_top(sh, title, rows):
         # 標題列），插入位置就已經超出格線範圍，Google 那邊會回 400 錯誤。給一般試算表
         # 常見的預設大小 1000，之後累積再多年的資料也還早才會用完。
         ws = sh.add_worksheet(title=title, rows=1000, cols=len(SHEET_HEADERS[title]))
-        ws.append_row(SHEET_HEADERS[title])
+    ensure_header(ws, title)   # 不管是新建立的還是既有的分頁，都確保標題列是最新的
 
     today = rows[0][0]   # 這批資料的日期（每列第一欄），假設同一批都是同一天
     existing = ws.get_all_values()

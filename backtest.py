@@ -30,6 +30,7 @@
 import json
 import os
 import sys
+import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
@@ -272,6 +273,24 @@ def compute_signal_stats(sh):
 TITLE_ORDER = ["多重訊號", "每日候選", "每週候選"]   # 通知裡分組顯示的順序
 
 
+def chunk_lines(lines, limit=3500):
+    """把一堆文字行組成好幾批，每批串起來不超過 limit 字元，不會從某一行中間硬切斷。
+    Telegram 單則訊息上限是 4096 字元，事件一多（實測發生過一次 308 筆）全部塞進一則
+    會遠遠超過，原本用 text[:4000] 硬切，超過的內容直接消失、收到的訊息會斷在不上不下
+    的地方，而且完全看不出來被截斷過。改成真的分批，每批各自發一則，一筆都不會少。"""
+    chunks, cur, cur_len = [], [], 0
+    for line in lines:
+        add_len = len(line) + 1   # +1 是換行符號
+        if cur and cur_len + add_len > limit:
+            chunks.append(cur)
+            cur, cur_len = [], 0
+        cur.append(line)
+        cur_len += add_len
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def notify_stop_events(events):
     """已停損/已停利的列另外發一則 Telegram 通知到專門的群組（TG_CHAT_ID_STOP），
     跟 notify.py 每天發的候選股摘要（TG_CHAT_ID）完全分開、各自獨立的訂閱對象。
@@ -309,15 +328,26 @@ def notify_stop_events(events):
             lines.append(f"{emoji} {e['code']} {e['name']}　{e['result']}　{pct}"
                         f"（{buy}持有 {e['days']} 天）")
     lines += ["", "僅為資料分析，不是投資建議；自負盈虧"]
-    text = "\n".join(lines)
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          json={"chat_id": chat, "text": text[:4000]}, timeout=30)
-        r.raise_for_status()
-        print(f"已發送 {len(events)} 筆停損/停利通知。")
-    except Exception as e:
-        # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
-        print(f"停損/停利通知發送失敗（{type(e).__name__}），請檢查 token 與 chat id。")
+    chunks = chunk_lines(lines)
+    ok = 0
+    for i, chunk in enumerate(chunks, 1):
+        text = "\n".join(chunk)
+        if len(chunks) > 1:
+            text = f"（{i}/{len(chunks)}）\n{text}"   # 分成好幾則時，每則開頭標一下是第幾則，避免看起來像斷掉的訊息
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                              json={"chat_id": chat, "text": text}, timeout=30)
+            r.raise_for_status()
+            ok += 1
+        except Exception as e:
+            # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
+            print(f"停損/停利通知第 {i}/{len(chunks)} 則發送失敗（{type(e).__name__}），請檢查 token 與 chat id。")
+        if i < len(chunks):
+            time.sleep(0.5)   # 同一個聊天室連續發好幾則，稍微停一下，避免被 Telegram 自己的速率限制擋下來
+    if ok == len(chunks):
+        print(f"已發送 {len(events)} 筆停損/停利通知（共 {len(chunks)} 則訊息）。")
+    else:
+        print(f"[注意] 停損/停利通知：{len(chunks)} 則訊息只有 {ok} 則成功送出，有些筆數可能沒送達。")
 
 
 def main():

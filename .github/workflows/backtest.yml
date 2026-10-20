@@ -1,0 +1,68 @@
+# 獨立跑 backtest.py，不用重跑 screener.py（完整分析全部股票）跟 build_site.py（重新產生
+# 網頁）——backtest.py 本身不依賴這兩支程式產生的本機檔案，候選股資料直接讀 Google 試算表、
+# 股價直接問 Yahoo，兩邊都是即時抓的，不需要 stocks.json/candidates_*.csv 這些本機檔案。
+#
+# 用途：daily.yml 本來就會在完整分析跑完之後接著跑一次回測（一天一次），這支是給「想在
+# 正常排程之外，額外手動／用 Telegram 指令觸發一次回測」用的，不用為了只重跑回測而把整個
+# screener.py（要抓兩千多檔股票的歷史資料，很花時間）也重跑一次。
+#
+# 做法比照 intraday-quotes.yml：先把目前已發布的網頁檔案抓回來（避免這次部署把它們蓋掉），
+# 跑完 backtest.py 只更新 signal_stats.json 這一個檔案，再重新部署。
+name: backtest
+
+on:
+  workflow_dispatch:   # 手動按「Run workflow」，或是透過 tg-commands.yml 收到 Telegram 指令觸發
+
+concurrency:
+  group: pages   # 跟 daily.yml、intraday-quotes.yml、night-futures.yml 共用同一個群組，避免互相蓋掉
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # 要抓的是「還在追蹤中」的股票歷史股價，通常不多，但抓寬一點保險
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install yfinance pandas requests gspread google-auth   # 輕量安裝，不需要 matplotlib/PyYAML
+      - name: 取回目前已發布的網頁檔案（避免這次部署把它們蓋掉）
+        run: |
+          mkdir -p site
+          for f in index.html history.json candidates_daily.csv candidates_weekly.csv market.json \
+                   universe.json quotes.json terms.html privacy.html inst_history.json \
+                   universe_cache.json signal_stats.json apple-touch-icon.png icon-192.png \
+                   icon-512.png favicon.png; do
+            curl -fsSL "https://yudi333.github.io/stock-watchlist/$f?t=$(date +%s)" -o "site/$f" \
+              || echo "略過 $f（可能還沒發布過，正常現象）"
+          done
+      - run: python backtest.py
+        continue-on-error: true   # 沒設定或回測失敗都不該讓網頁發布跟著失敗
+        env:
+          GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
+          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID_STOP: ${{ secrets.TG_CHAT_ID_STOP }}
+      - name: 把這次算出來的 signal_stats.json 放進要部署的網頁
+        run: '[ -f signal_stats.json ] && cp signal_stats.json site/signal_stats.json || echo "這次沒有產生 signal_stats.json，維持原本的版本"'
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

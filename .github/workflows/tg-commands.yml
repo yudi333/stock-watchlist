@@ -1,0 +1,39 @@
+# 定期檢查 Telegram 有沒有新訊息，收到「重新發」就觸發對應的 workflow——見 tg_commands.py
+# 開頭的說明。機器人本身沒有「即時收到訊息就反應」的能力（這個網站沒有一直開著的伺服器），
+# 只能用輪詢的方式，每 5 分鐘檢查一次，指令打完最多等 5 分鐘會被處理到，不是真正即時。
+#
+# 排程一樣不是用 GitHub 自己的 schedule（原因跟其他 workflow 相同：常常延遲或整個被跳過），
+# 改用外部的 cron-job.org 定時呼叫 workflow_dispatch，crontab 是 `*/5 * * * *`（不限交易
+# 時段，24 小時都檢查——指令可能隨時想發）。要改檢查頻率到 cron-job.org 網站上改，不用動
+# 這個檔案。
+#
+# 這支本身不產生/部署網頁，跟 pages 那個 concurrency 群組無關，不會跟其他 workflow 互相卡住。
+name: tg-commands
+
+on:
+  workflow_dispatch:   # cron-job.org 定時呼叫這個；也可以自己到 GitHub 網頁上手動按「Run workflow」
+
+concurrency:
+  group: tg-commands   # 跟 pages 那個群組無關，只是避免這支自己重疊執行（萬一上一次還沒跑完）
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write   # 觸發 daily.yml / backtest.yml 的 workflow_dispatch 需要這個權限
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3   # 只是檢查訊息、觸發別的 workflow，正常幾秒內會跑完
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python tg_commands.py
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID_STOP: ${{ secrets.TG_CHAT_ID_STOP }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

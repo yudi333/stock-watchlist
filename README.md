@@ -512,3 +512,39 @@ Bot（`TG_BOT_TOKEN`），只是收通知的對象不同，方便只想知道「
    新增一個 `TG_CHAT_ID_STOP`：剛剛查到的群組 chat id（`TG_BOT_TOKEN` 共用同一組，不用重設）
 4. 存好之後，下次 `backtest.py` 執行、剛好有新的已停損/已停利，就會發到這個群組；沒設定
    `TG_CHAT_ID_STOP` 也完全不影響其他功能，只是不會有這則額外通知
+
+### 在 Telegram 群組裡打字觸發重新執行
+
+機器人本身只會「發」訊息，不會「收」訊息——要讓它聽得懂你在群組打的字，沒有伺服器可以做到
+「訊息一送出就馬上反應」，只能靠 [tg_commands.py](tg_commands.py) 定期（預設每 5 分鐘）
+檢查 Telegram 有沒有新訊息，所以指令**最多要等 5 分鐘**才會被處理到，不是真正即時。
+
+**指令**：在群組裡打「**重新發**」（整句，前後空白沒關係）——
+
+- 在上面「Telegram 更新通知」那個群組打，會觸發 `daily.yml`（整個完整分析重新跑一次：
+  選股、產生網頁、記錄試算表、回測，全部重來）
+- 在上面「已停損／已停利」那個群組打，會觸發新增的 [backtest.yml](.github/workflows/backtest.yml)
+  （只重跑回測，不用重跑完整分析，比較快）——`backtest.py` 本身不依賴 `screener.py`／
+  `build_site.py` 產生的本機檔案（候選股資料直接讀 Google 試算表、股價直接問 Yahoo），
+  才能拆成一支獨立的 workflow
+
+機器人收到指令會先回一句「收到，已觸發○○重新執行」，讓你知道指令有生效；實際跑完、
+產生新的通知還要再等幾分鐘。不認得的文字、或其他聊天室打的，一律忽略，不會有任何反應。
+
+**安全提醒**：這兩個群組裡**任何人**都能打這句指令觸發重新執行，不是只有你自己——如果
+想限制只有自己能用，可以在 Telegram 群組本身的設定裡控管誰能發言，這支程式不另外做
+使用者層級的檢查。
+
+**設定步驟**：
+1. 到 GitHub 這個 repo 的 **Settings → Actions → General**，往下捲到「Workflow permissions」，
+   選「**Read and write permissions**」並存檔——`tg_commands.py` 要觸發別的 workflow，
+   需要這個權限，沒開會失敗
+2. 到 [cron-job.org](https://cron-job.org) 新增第 4 個排程工作，URL 指向：
+   ```
+   https://api.github.com/repos/你的帳號/stock-watchlist/actions/workflows/tg-commands.yml/dispatches
+   ```
+   方法選 `POST`，Headers 加 `Authorization: Bearer 你的GitHub權杖`（跟其他三個排程工作
+   共用同一組設定方式，照抄就好）、`Accept: application/vnd.github+json`，Body 填
+   `{"ref":"main"}`，排程時間設 `*/5 * * * *`（每 5 分鐘，不限交易時段）
+3. 存好之後，`TG_BOT_TOKEN`／`TG_CHAT_ID`／`TG_CHAT_ID_STOP` 都已經設定過了（前面兩節），
+   不用再另外新增

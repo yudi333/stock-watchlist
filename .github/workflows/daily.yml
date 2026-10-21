@@ -19,6 +19,14 @@ name: daily-update
 
 on:
   workflow_dispatch:   # cron-job.org 定時呼叫這個；也可以自己到 GitHub 網頁上手動按「Run workflow」
+    inputs:
+      force_backtest:
+        description: >-
+          即使今天已經回測過也強制再跑一次回測（每天 21:00 真正的排程要帶這個，見下面
+          「回測」那個步驟的說明；不帶就維持原本「今天已經跑過就跳過」的行為，手動用
+          Telegram「重新跑」補跑時用這個，省 API 額度）
+        type: boolean
+        default: false
 
 concurrency:
   group: pages   # 跟 intraday-quotes.yml、night-futures.yml 共用同一個群組，避免兩邊同時發布網頁互相蓋掉
@@ -59,7 +67,9 @@ jobs:
       - name: 檢查今天是否已經回測過
         # 一天最多回測一次：萬一手動重跑好幾次（排程本身一天只跑一次），回測查的是以前
         # 記過的舊資料，當天重跑沒有額外好處，只是浪費 API 額度。記錄到 Google 試算表
-        # 不套用這個限制，見下面那個步驟的說明。
+        # 不套用這個限制，見下面那個步驟的說明。真正每天 21:00 的那次排程會帶
+        # force_backtest=true，不管今天有沒有跑過都要真的跑一次——這個快取只影響「今天
+        # 已經用 Telegram『重新跑』補跑過」這種情況要不要再跳過，不影響正式排程。
         id: backtest_logged
         uses: actions/cache@v4
         with:
@@ -77,7 +87,9 @@ jobs:
           GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
       - name: 回測（檢查以前記錄過的候選股後來有沒有觸發停損停利）
-        if: steps.backtest_logged.outputs.cache-hit != 'true'
+        # 今天沒跑過（cache miss）就跑；或是帶了 force_backtest=true（真正 21:00 的排程），
+        # 不管今天跑過沒有都要真的跑一次，不能被前面手動補跑的快取擋掉。
+        if: steps.backtest_logged.outputs.cache-hit != 'true' || inputs.force_backtest
         run: python backtest.py && (mkdir -p .backtest-logged && date > .backtest-logged/done)
         continue-on-error: true   # 沒設定或回測失敗都不該讓網頁發布跟著失敗
         env:

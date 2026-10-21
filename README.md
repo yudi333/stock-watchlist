@@ -318,6 +318,18 @@ Firestore 用即時監聽（`onSnapshot`），另一台裝置改了，這台**�
 觀察清單、候選股仍是收盤後的資料。**夜盤**則是每天早上約 08:03 用 `night-futures.yml`（見上方
 「額外過濾與加分」的夜盤說明）單獨更新一次。
 
+**確保 21:00 這次一定會真的回測**：`daily.yml` 裡的回測步驟平常「今天已經跑過就跳過」
+（見下面「已停損／已停利另外發 Telegram 通知」那節的說明，避免用 Telegram「重新跑」
+白天補跑時浪費 API 額度）——但如果白天補跑過，21:00 這次正式排程不該因此被跳過。做法是
+cron-job.org 呼叫 `daily.yml` 的 `workflow_dispatch` 時，Body 要帶 `force_backtest` 這個
+輸入值，**強制這次一定要真的回測**，不管今天稍早有沒有跑過：
+```
+{"ref":"main","inputs":{"force_backtest":"true"}}
+```
+到 cron-job.org 找到 `daily.yml` 那個排程工作，把 Body 從原本的 `{"ref":"main"}` 改成
+上面這樣並存檔即可；用 Telegram「重新跑」或自己手動按 Run workflow 觸發的，不用帶這個
+（維持原本「今天跑過就跳過」的省額度行為）。
+
 **官方資料為主、Yahoo 為輔**：`screener.py` 的 `get_universe()` 除了排名用的成交金額/成交量，
 也會抓證交所（`MI_INDEX`，跟大盤指數同一套查詢介面，收盤後很快就有資料；原本用的
 `STOCK_DAY_ALL` 這個 OpenAPI 實測延遲將近一整天，查到的常常是前一天的資料，已經換掉）與櫃買

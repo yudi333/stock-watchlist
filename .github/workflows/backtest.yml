@@ -54,7 +54,7 @@ jobs:
         run: |
           [ -f signal_stats.json ] && cp signal_stats.json site/signal_stats.json || echo "這次沒有產生 signal_stats.json，維持原本的版本"
           [ -f stop_message.txt ] && cp stop_message.txt site/stop_message.txt || echo "這次沒有新的停損/停利通知，維持原本的版本"
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 

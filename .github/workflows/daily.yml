@@ -114,7 +114,7 @@ jobs:
           [ -f message.txt ] && cp message.txt site/message.txt || echo "沒有 message.txt，略過"
           [ -f stop_message.txt ] && cp stop_message.txt site/stop_message.txt || echo "沒有 stop_message.txt，維持原本的版本"
           [ -f signal_stats.json ] && cp signal_stats.json site/signal_stats.json || echo "沒有 signal_stats.json，維持原本的版本"
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 

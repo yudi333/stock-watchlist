@@ -46,7 +46,7 @@ jobs:
           done
       - run: python night_futures.py site/market.json
         continue-on-error: true   # 抓不到夜盤也要保留剛剛取回的舊網頁內容，不能讓網頁消失
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 

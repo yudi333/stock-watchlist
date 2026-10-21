@@ -331,15 +331,24 @@ def notify_stop_events(events):
     （見 template.html 的 --good 是紅色、--bad 是綠色）。
 
     實際發出去的內容會存一份到 STOP_MESSAGE_FILE，給 resend_last_stop_message() 用——
-    沒有新事件（events 是空的）就不寫，維持上一次真正發過的內容，不會被清空。"""
-    if not events:
-        print("這次沒有新的已停損/已停利，不用發通知。")
-        return
+    沒有新事件（events 是空的）就不寫，維持上一次真正發過的內容，不會被清空。
+
+    沒有新事件也會發一句簡短確認（不是完全不發），讓用 Telegram「重新跑」手動觸發的人
+    知道流程真的有跑完、不是卡住或哪個環節出錯；這句確認不存進 STOP_MESSAGE_FILE，不會
+    蓋掉「訊息重發」要重發的上一次真實事件內容。"""
     token, chat = os.environ.get("TG_BOT_TOKEN"), os.environ.get("TG_CHAT_ID_STOP")
     if not token or not chat:
         print("沒有設定 TG_CHAT_ID_STOP，略過停損/停利通知。")
         return
     today = datetime.now(timezone(timedelta(hours=8)))
+    if not events:
+        lines = [f"日期：{today.year}年{today.month}月{today.day}日", "這次檢查沒有新的已停損/已停利。"]
+        ok, total = send_chunks(token, chat, lines)
+        if ok == total:
+            print("這次沒有新的已停損/已停利，已發送確認通知。")
+        else:
+            print("[注意] 沒有新事件的確認通知發送失敗。")
+        return
     by_title = {}
     for e in events:
         by_title.setdefault(e["title"], []).append(e)

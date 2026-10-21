@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 20   # 正常幾分鐘內會跑完，上限抓寬一點；真的卡住就讓它失敗，不要無限等
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -136,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install requests==2.32.5

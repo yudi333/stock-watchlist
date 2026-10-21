@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 3   # 只是檢查訊息、觸發別的 workflow，正常幾秒內會跑完
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install requests==2.32.5

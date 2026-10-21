@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 3   # 只是抓一個文字檔、發一則 Telegram 訊息，正常幾秒內會跑完
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install requests==2.32.5

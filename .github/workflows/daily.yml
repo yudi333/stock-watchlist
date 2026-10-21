@@ -75,7 +75,7 @@ jobs:
         with:
           path: .backtest-logged
           key: backtest-logged-${{ steps.sheet_date.outputs.date }}
-      - run: pip install gspread google-auth   # 記錄／回測用到，daily-update 每次都需要
+      - run: pip install gspread==6.2.1 google-auth==2.50.0   # 記錄／回測用到，daily-update 每次都需要
       - name: 記錄到 Google 試算表
         # 這個故意「每次都跑」，不是一天只記一次：同一天的 3 次分析結果可能不一樣（Yahoo
         # 資料中途修正），網站顯示的永遠是最後一次的結果，試算表也要跟著更新到最新，
@@ -139,7 +139,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests
+      - run: pip install requests==2.32.5
       - uses: actions/download-artifact@v4
         continue-on-error: true   # build 太早失敗、根本沒產生 message.txt 也沒關係
         with:

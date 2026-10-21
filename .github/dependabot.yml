@@ -1,0 +1,14 @@
+# requirements.txt／requirements-ci.txt 跟各 workflow 裡的套件都已經釘死精確版本
+# （不用 >= 範圍），避免套件作者發新版時在沒人注意的情況下被自動裝進來。釘死版本的
+# 代價是不會自動拿到安全更新，所以用 Dependabot 定期開 PR 提醒有新版本可用，由人工
+# 審核後再決定要不要合併、更新版本號——兼顧「版本固定可預期」跟「不會錯過資安更新」。
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"   # 各 workflow 裡用到的 actions/checkout@v4 這類也一併顧到
+    directory: "/"
+    schedule:
+      interval: "weekly"

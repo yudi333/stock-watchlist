@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install requests   # 最輕量安裝，不需要 pandas/yfinance
+      - run: pip install requests==2.32.5   # 最輕量安裝，不需要 pandas/yfinance
       - name: 取回目前已發布的網頁檔案（避免這次發布把它們蓋掉）
         run: |
           mkdir -p site

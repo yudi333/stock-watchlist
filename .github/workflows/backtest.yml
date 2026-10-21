@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install yfinance pandas requests gspread google-auth   # 輕量安裝，不需要 matplotlib/PyYAML
+      - run: pip install yfinance==1.2.0 pandas==2.3.3 requests==2.32.5 gspread==6.2.1 google-auth==2.50.0   # 輕量安裝，不需要 matplotlib/PyYAML
       - name: 取回目前已發布的網頁檔案（避免這次部署把它們蓋掉）
         run: |
           mkdir -p site

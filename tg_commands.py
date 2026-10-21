@@ -3,11 +3,13 @@
 機器人目前只會「發」訊息，從來沒有「收」訊息的能力，要讓它聽得懂你在群組打的字，
 只能用輪詢的方式（這個網站沒有一直開著的伺服器，沒辦法做到訊息一送出就馬上反應）。
 
-目前支援的指令：
-  「重新發」（整句，前後空白會被忽略）——
-    - 在 TG_CHAT_ID（DiStocks 每日摘要）那個聊天室打，觸發 daily.yml（整個完整分析重跑一次）
-    - 在 TG_CHAT_ID_STOP（已停損/已停利通知）那個聊天室打，觸發 backtest.yml（只重跑回測，
-      不用重跑完整分析，比較快）
+目前支援的指令（整句，前後空白會被忽略）：
+  「重新跑」——整個重新分析一次（會真的重新抓資料、花好幾分鐘）
+    - 在 TG_CHAT_ID（DiStocks 每日摘要）那個聊天室打，觸發 daily.yml
+    - 在 TG_CHAT_ID_STOP（已停損/已停利通知）那個聊天室打，觸發 backtest.yml
+  「訊息重發」——不重新分析，只是把上一次已經發過的內容原封不動重發一次（幾秒內完成）
+    - 在 TG_CHAT_ID 打，觸發 resend-daily.yml
+    - 在 TG_CHAT_ID_STOP 打，觸發 resend-backtest.yml
   其他聊天室、或不認得的文字，一律忽略。
 
 不特別保存「上次讀到哪裡」這種跨次執行的狀態（offset）——每次執行都呼叫 getUpdates 拿到
@@ -35,8 +37,19 @@ import time
 import requests
 
 RECENT_SECONDS = 600   # 訊息時間要在這個秒數內才處理（輪詢間隔的好幾倍，留緩衝但不會處理到過期太久的）
-COMMAND = "重新發"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+# 指令文字 -> {聊天室代稱: (要觸發的 workflow 檔名, 給使用者看的中文標籤)}
+COMMANDS = {
+    "重新跑": {
+        "daily": ("daily.yml", "每日分析（daily-update）整個重新執行一次"),
+        "stop": ("backtest.yml", "回測（backtest）整個重新執行一次"),
+    },
+    "訊息重發": {
+        "daily": ("resend-daily.yml", "把上一次已經發過的分析摘要原封不動重發一次"),
+        "stop": ("resend-backtest.yml", "把上一次已經發過的停損/停利通知原封不動重發一次"),
+    },
+}
 
 
 def trigger_workflow(repo, token, workflow_file):
@@ -70,8 +83,8 @@ def main():
         print("沒有設定 TG_BOT_TOKEN，略過。")
         return 0
     chat_targets = {
-        os.environ.get("TG_CHAT_ID", ""): ("daily.yml", "每日分析（daily-update）"),
-        os.environ.get("TG_CHAT_ID_STOP", ""): ("backtest.yml", "回測（backtest）"),
+        os.environ.get("TG_CHAT_ID", ""): "daily",
+        os.environ.get("TG_CHAT_ID_STOP", ""): "stop",
     }
     chat_targets.pop("", None)   # 兩個環境變數都可能沒設定，空字串不是有效的 chat id，先濾掉
     if not chat_targets:
@@ -107,20 +120,22 @@ def main():
         chat_id = str(msg.get("chat", {}).get("id", ""))
         text = (msg.get("text") or "").strip()
         age = now - msg.get("date", 0)
-        if chat_id not in chat_targets:
+        chat_key = chat_targets.get(chat_id)
+        if chat_key is None:
             continue   # 不是我們在管的兩個聊天室，忽略（不管打了什麼）
-        if text != COMMAND:
+        cmd = COMMANDS.get(text)
+        if cmd is None:
             continue   # 看得懂這個聊天室，但不是認得的指令
         if age > RECENT_SECONDS:
-            print(f"指令「{COMMAND}」太舊了（{age:.0f} 秒前），跳過不處理。")
+            print(f"指令「{text}」太舊了（{age:.0f} 秒前），跳過不處理。")
             continue
-        workflow_file, label = chat_targets[chat_id]
-        print(f"收到指令「{COMMAND}」，來自「{label}」的聊天室，觸發 {workflow_file}。")
+        workflow_file, label = cmd[chat_key]
+        print(f"收到指令「{text}」，來自聊天室，觸發 {workflow_file}。")
         if trigger_workflow(gh_repo, gh_token, workflow_file):
             triggered += 1
-            send_ack(token, chat_id, f"收到「{COMMAND}」，已觸發{label}重新執行，跑完會有新的通知。")
+            send_ack(token, chat_id, f"收到「{text}」，已觸發：{label}，跑完會有新的通知。")
         else:
-            send_ack(token, chat_id, f"收到「{COMMAND}」，但觸發{label}失敗了，麻煩自己到 GitHub 檢查。")
+            send_ack(token, chat_id, f"收到「{text}」，但觸發失敗了，麻煩自己到 GitHub 檢查。")
 
     # 不管有沒有真的觸發任何動作，看過的訊息都要跟 Telegram 確認掉，下次才不會又收到同一批
     try:

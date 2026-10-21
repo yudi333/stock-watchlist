@@ -1,0 +1,34 @@
+# Telegram 指令「訊息重發」（回測群組）用：不重新抓股價、不重新判斷結果，只是把目前已經
+# 發布在網站上的 stop_message.txt（backtest.py 每次真的發出新的停損/停利通知時都會順便
+# 存一份，見 backtest.py 的 notify_stop_events()）原封不動重新發一次到 Telegram。
+#
+# 跟「重新跑」（backtest.yml）完全不同：這支不連 Google 試算表、不產生/部署網頁，幾秒內
+# 就跑完，也因此不會跟其他工作共用的 pages concurrency 群組互相卡住或取消。
+name: resend-backtest
+
+on:
+  workflow_dispatch:   # 透過 tg-commands.yml 收到 Telegram 指令「訊息重發」時觸發；也可以手動按「Run workflow」
+
+concurrency:
+  group: resend-backtest
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3   # 只是抓一個文字檔、發一則 Telegram 訊息，正常幾秒內會跑完
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 抓回目前已發布的停損/停利通知內容
+        run: curl -fsSL "https://yudi333.github.io/stock-watchlist/stop_message.txt?t=$(date +%s)" -o stop_message.txt || echo "網站上還沒有，略過"
+      - run: python backtest.py resend
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID_STOP: ${{ secrets.TG_CHAT_ID_STOP }}

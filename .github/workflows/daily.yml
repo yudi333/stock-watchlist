@@ -51,6 +51,8 @@ jobs:
       - run: python notify.py make   # 產生 Telegram 通知的摘要文字（message.txt），給最後的 notify job 用
         if: always()
         continue-on-error: true      # 產生摘要失敗不該讓網頁發布跟著失敗
+      - name: 先抓回目前已發布的停損/停利通知內容（這次如果沒有新事件，維持原本的，不被清空）
+        run: curl -fsSL "https://yudi333.github.io/stock-watchlist/stop_message.txt?t=$(date +%s)" -o stop_message.txt || echo "網站上還沒有，略過"
       - name: 算出今天的日期（台灣時間）
         id: sheet_date
         run: echo "date=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_OUTPUT"
@@ -89,6 +91,11 @@ jobs:
           name: notify-message
           path: message.txt
           retention-days: 1
+      - name: 把摘要／停損停利通知內容也放進要部署的網頁（給「訊息重發」指令用，不用重新分析就能再發一次）
+        if: always()
+        run: |
+          [ -f message.txt ] && cp message.txt site/message.txt || echo "沒有 message.txt，略過"
+          [ -f stop_message.txt ] && cp stop_message.txt site/stop_message.txt || echo "沒有 stop_message.txt，維持原本的版本"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

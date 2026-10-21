@@ -10,6 +10,8 @@
 用法（在 GitHub Actions 裡自動執行）：
   python notify.py make                      # 依今天的分析結果產生 message.txt
   python notify.py send <build結果> <deploy結果>  # 傳送或編輯 Telegram 訊息（成功傳摘要、失敗傳警告）
+  python notify.py resend                     # 不重新分析，把 message.txt 現有內容原封不動發一次新訊息
+                                                # （Telegram 指令「訊息重發」用，見 tg_commands.py）
 
 需要兩個環境變數（在 GitHub repo 的 Settings > Secrets 設定，不要寫進程式）：
   TG_BOT_TOKEN   BotFather 給的機器人 token
@@ -163,6 +165,14 @@ def main():
         if mid:   # 存下來給同一天後面的執行編輯用；沒送出成功就不寫，維持原本（如果有的話）的 id
             MESSAGE_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
             MESSAGE_ID_FILE.write_text(str(mid), encoding="utf-8")
+        return 0
+    if cmd == "resend":
+        # 不帶 edit_id：一定發一則新訊息（不是編輯），讓使用者在聊天室裡真的看到「重發」了一次，
+        # 不是像平常那樣悄悄編輯掉舊訊息、看起來什麼都沒發生。
+        if MESSAGE_FILE.exists():
+            send(MESSAGE_FILE.read_text(encoding="utf-8"))
+        else:
+            send("目前還沒有可以重發的分析摘要，請先用「重新跑」整個分析一次。")
         return 0
     print(__doc__)
     return 1

@@ -1,0 +1,35 @@
+# Telegram 指令「訊息重發」（精選群組）用：不重新分析、不重新抓資料，只是把目前已經
+# 發布在網站上的 message.txt（daily.yml 每次跑完都會順便發布一份，見該檔案）原封不動
+# 重新發一次到 Telegram，給錯過通知、或想再看一次今天結果的人用。
+#
+# 跟「重新跑」（daily.yml）完全不同：這支不產生/部署網頁，不碰 Google 試算表，幾秒內就
+# 跑完，也因此不會跟 daily.yml／backtest.yml／intraday-quotes.yml／night-futures.yml
+# 共用的 pages concurrency 群組互相卡住或取消——這些才是真的在改網頁內容的工作。
+name: resend-daily
+
+on:
+  workflow_dispatch:   # 透過 tg-commands.yml 收到 Telegram 指令「訊息重發」時觸發；也可以手動按「Run workflow」
+
+concurrency:
+  group: resend-daily
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3   # 只是抓一個文字檔、發一則 Telegram 訊息，正常幾秒內會跑完
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 抓回目前已發布的摘要內容
+        run: curl -fsSL "https://yudi333.github.io/stock-watchlist/message.txt?t=$(date +%s)" -o message.txt || echo "網站上還沒有，略過"
+      - run: python notify.py resend
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}

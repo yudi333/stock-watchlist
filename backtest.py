@@ -15,14 +15,17 @@
 
 這次執行新判定出「已停損」或「已停利」的列（本來是追蹤中/尚未進場，這次才變成終局結果），
 會另外發一則 Telegram 通知到專門的群組（跟每天的候選股摘要分開，見下面的環境變數），
-方便只想追蹤「結果」的人訂閱這個群組就好，不用每天收候選股清單。
+方便只想追蹤「結果」的人訂閱這個群組就好，不用每天收候選股清單。每次實際發出去的內容
+也會存一份在 stop_message.txt，給 `python backtest.py resend`（Telegram 指令「訊息重發」
+用，見 tg_commands.py）直接重發同一份內容用，不用重新抓股價、重新判斷一次。
 
 用法（在 GitHub Actions 裡自動執行，見 daily.yml）：
-  python backtest.py
+  python backtest.py          # 正常流程：查有沒有新的停損/停利，更新試算表、有新事件才發通知
+  python backtest.py resend   # 不查任何新資料，只是把上次發過的內容（stop_message.txt）重發一次
 
-需要環境變數（跟 sheets_log.py 共用同一組）：
+需要環境變數（跟 sheets_log.py 共用同一組，resend 模式不需要）：
   GOOGLE_SHEETS_KEY / GOOGLE_SHEETS_ID
-停損/停利通知需要（跟 notify.py 共用同一個 bot，但另開一個群組/聊天室）：
+停損/停利通知需要（跟 notify.py 共用同一個 bot，但另開一個群組/聊天室，resend 模式也需要）：
   TG_BOT_TOKEN / TG_CHAT_ID_STOP
 沒設定的話會直接略過，不會讓更新失敗。
 """
@@ -33,11 +36,13 @@ import sys
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-import pandas as pd
-
-from stock_checker import BASE_DIR, fetch_history
-
+# pandas／stock_checker（連帶 yfinance）只有真的要抓股價、重新判斷結果時才需要，resend 模式
+# （只是把 STOP_MESSAGE_FILE 的舊內容原封不動重發一次）用不到，故意不在最上面就 import，
+# 讓 resend-backtest.yml 那支輕量 workflow 不用額外安裝 pandas/yfinance 這些套件。
+BASE_DIR = Path(__file__).parent
+STOP_MESSAGE_FILE = BASE_DIR / "stop_message.txt"   # 最後一次停損/停利通知的完整內容，給「訊息重發」用
 RESULT_COLS = ["結果", "結果日期", "實際報酬%", "持有天數"]
 # 追蹤期限（交易日）：超過這麼多天還沒進場/沒觸發停損停利，就不再繼續無限期等下去
 EXPIRE_DAYS = {"多重訊號": 60, "每日候選": 60, "每週候選": 120}
@@ -85,6 +90,7 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
     None，這種情況維持原狀，不覆蓋，下次還可以再試。買入日期是真正進場那天（不是訊號日），
     還沒進場就是空字串。"""
     try:
+        import pandas as pd
         # fetch_history() 回傳的 df 索引是時區感知的（Asia/Taipei），跟沒給時區的 Timestamp
         # 比較會直接丟 TypeError——之前只用沒時區的假資料測過，沒踩到這個問題，實際資料
         # 一定要比照 df 自己的時區建立 Timestamp 才不會整批都比較失敗。
@@ -134,6 +140,7 @@ def backtest_sheet(sh, title, code_col, date_col):
     """處理一個分頁，回傳 (更新了幾列, 這次新產生的已停損/已停利事件列表)。
     code_col/date_col 是「代號」「日期」欄的名字。"""
     import gspread
+    from stock_checker import fetch_history
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
@@ -291,6 +298,29 @@ def chunk_lines(lines, limit=3500):
     return chunks
 
 
+def send_chunks(token, chat, lines):
+    """把一串文字行分批發到指定聊天室，notify_stop_events() 跟 resend_last_stop_message()
+    共用同一套發送邏輯。回傳 (成功則數, 總則數)。"""
+    import requests
+    chunks = chunk_lines(lines)
+    ok = 0
+    for i, chunk in enumerate(chunks, 1):
+        text = "\n".join(chunk)
+        if len(chunks) > 1:
+            text = f"（{i}/{len(chunks)}）\n{text}"   # 分成好幾則時，每則開頭標一下是第幾則，避免看起來像斷掉的訊息
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                              json={"chat_id": chat, "text": text}, timeout=30)
+            r.raise_for_status()
+            ok += 1
+        except Exception as e:
+            # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
+            print(f"第 {i}/{len(chunks)} 則發送失敗（{type(e).__name__}），請檢查 token 與 chat id。")
+        if i < len(chunks):
+            time.sleep(0.5)   # 同一個聊天室連續發好幾則，稍微停一下，避免被 Telegram 自己的速率限制擋下來
+    return ok, len(chunks)
+
+
 def notify_stop_events(events):
     """已停損/已停利的列另外發一則 Telegram 通知到專門的群組（TG_CHAT_ID_STOP），
     跟 notify.py 每天發的候選股摘要（TG_CHAT_ID）完全分開、各自獨立的訂閱對象。
@@ -298,7 +328,10 @@ def notify_stop_events(events):
 
     顏色符號刻意跟「紅色＝警示、綠色＝安全」的直覺相反：已停利（賺錢）用🔴、已停損（賠錢）
     用🟢，是跟台股看盤「紅漲綠跌」的習慣對齊，也跟這個網站其他地方的配色一致
-    （見 template.html 的 --good 是紅色、--bad 是綠色）。"""
+    （見 template.html 的 --good 是紅色、--bad 是綠色）。
+
+    實際發出去的內容會存一份到 STOP_MESSAGE_FILE，給 resend_last_stop_message() 用——
+    沒有新事件（events 是空的）就不寫，維持上一次真正發過的內容，不會被清空。"""
     if not events:
         print("這次沒有新的已停損/已停利，不用發通知。")
         return
@@ -306,7 +339,6 @@ def notify_stop_events(events):
     if not token or not chat:
         print("沒有設定 TG_CHAT_ID_STOP，略過停損/停利通知。")
         return
-    import requests
     today = datetime.now(timezone(timedelta(hours=8)))
     by_title = {}
     for e in events:
@@ -328,29 +360,50 @@ def notify_stop_events(events):
             lines.append(f"{emoji} {e['code']} {e['name']}　{e['result']}　{pct}"
                         f"（{buy}持有 {e['days']} 天）")
     lines += ["", "僅為資料分析，不是投資建議；自負盈虧"]
-    chunks = chunk_lines(lines)
-    ok = 0
-    for i, chunk in enumerate(chunks, 1):
-        text = "\n".join(chunk)
-        if len(chunks) > 1:
-            text = f"（{i}/{len(chunks)}）\n{text}"   # 分成好幾則時，每則開頭標一下是第幾則，避免看起來像斷掉的訊息
-        try:
-            r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                              json={"chat_id": chat, "text": text}, timeout=30)
-            r.raise_for_status()
-            ok += 1
-        except Exception as e:
-            # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
-            print(f"停損/停利通知第 {i}/{len(chunks)} 則發送失敗（{type(e).__name__}），請檢查 token 與 chat id。")
-        if i < len(chunks):
-            time.sleep(0.5)   # 同一個聊天室連續發好幾則，稍微停一下，避免被 Telegram 自己的速率限制擋下來
-    if ok == len(chunks):
-        print(f"已發送 {len(events)} 筆停損/停利通知（共 {len(chunks)} 則訊息）。")
+    try:
+        STOP_MESSAGE_FILE.write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass   # 存檔失敗頂多讓「訊息重發」晚一次更新，不影響這次通知本身
+    ok, total = send_chunks(token, chat, lines)
+    if ok == total:
+        print(f"已發送 {len(events)} 筆停損/停利通知（共 {total} 則訊息）。")
     else:
-        print(f"[注意] 停損/停利通知：{len(chunks)} 則訊息只有 {ok} 則成功送出，有些筆數可能沒送達。")
+        print(f"[注意] 停損/停利通知：{total} 則訊息只有 {ok} 則成功送出，有些筆數可能沒送達。")
+
+
+def resend_last_stop_message():
+    """「訊息重發」指令用：不重新抓股價、不重新判斷結果，只是把上一次真正發過的停損/停利
+    通知內容（STOP_MESSAGE_FILE，由 tg-commands workflow 從目前已發布的網頁抓回來）原封
+    不動重發一次，給錯過通知、或想再看一次的人用。內容本身帶著原本的日期，不會被誤會成
+    「今天」的新結果。"""
+    token, chat = os.environ.get("TG_BOT_TOKEN"), os.environ.get("TG_CHAT_ID_STOP")
+    if not token or not chat:
+        print("沒有設定 TG_CHAT_ID_STOP，略過。")
+        return
+    import requests
+    if not STOP_MESSAGE_FILE.exists():
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": chat, "text": "目前還沒有已停損/已停利的通知紀錄可以重發。"},
+                      timeout=30)
+        print("目前沒有 stop_message.txt，已回覆提醒訊息。")
+        return
+    lines = STOP_MESSAGE_FILE.read_text(encoding="utf-8").split("\n")
+    ok, total = send_chunks(token, chat, lines)
+    if ok == total:
+        print(f"已重新發送上一次的停損/停利通知（共 {total} 則訊息）。")
+    else:
+        print(f"[注意] 重新發送時，{total} 則訊息只有 {ok} 則成功送出。")
 
 
 def main():
+    if (sys.argv[1] if len(sys.argv) > 1 else "") == "resend":
+        try:
+            resend_last_stop_message()
+        except Exception as e:
+            print(f"[注意] 重新發送時發生例外（{type(e).__name__}：{e}），略過。完整錯誤：")
+            traceback.print_exc()
+            return 1
+        return 0
     try:
         sh = connect()
     except Exception as e:

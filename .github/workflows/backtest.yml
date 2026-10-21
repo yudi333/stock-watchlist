@@ -38,8 +38,8 @@ jobs:
           mkdir -p site
           for f in index.html history.json candidates_daily.csv candidates_weekly.csv market.json \
                    universe.json quotes.json terms.html privacy.html inst_history.json \
-                   universe_cache.json signal_stats.json apple-touch-icon.png icon-192.png \
-                   icon-512.png favicon.png; do
+                   universe_cache.json signal_stats.json message.txt stop_message.txt \
+                   apple-touch-icon.png icon-192.png icon-512.png favicon.png; do
             curl -fsSL "https://yudi333.github.io/stock-watchlist/$f?t=$(date +%s)" -o "site/$f" \
               || echo "略過 $f（可能還沒發布過，正常現象）"
           done
@@ -50,8 +50,10 @@ jobs:
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID_STOP: ${{ secrets.TG_CHAT_ID_STOP }}
-      - name: 把這次算出來的 signal_stats.json 放進要部署的網頁
-        run: '[ -f signal_stats.json ] && cp signal_stats.json site/signal_stats.json || echo "這次沒有產生 signal_stats.json，維持原本的版本"'
+      - name: 把這次算出來的 signal_stats.json／停損停利通知內容放進要部署的網頁
+        run: |
+          [ -f signal_stats.json ] && cp signal_stats.json site/signal_stats.json || echo "這次沒有產生 signal_stats.json，維持原本的版本"
+          [ -f stop_message.txt ] && cp stop_message.txt site/stop_message.txt || echo "這次沒有新的停損/停利通知，維持原本的版本"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

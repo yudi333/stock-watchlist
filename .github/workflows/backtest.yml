@@ -7,7 +7,7 @@
 # screener.py（要抓兩千多檔股票的歷史資料，很花時間）也重跑一次。
 #
 # 做法比照 intraday-quotes.yml：先把目前已發布的網頁檔案抓回來（避免這次部署把它們蓋掉），
-# 跑完 backtest.py 只更新 signal_stats.json 這一個檔案，再重新部署。
+# 跑完 backtest.py 只更新 signal_stats.json／stop_message.txt 這兩個檔案，再重新部署。
 name: backtest
 
 on:

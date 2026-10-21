@@ -103,11 +103,17 @@ jobs:
           name: notify-message
           path: message.txt
           retention-days: 1
-      - name: 把摘要／停損停利通知內容也放進要部署的網頁（給「訊息重發」指令用，不用重新分析就能再發一次）
+      - name: 把摘要／停損停利通知／訊號勝率統計也放進要部署的網頁
+        # 這三個都是用「複製進 site/」的方式補發布，不是 build_site.py 自己產生的：
+        # message.txt／stop_message.txt 給「訊息重發」指令用；signal_stats.json 是回測
+        # 算出來的訊號歷史勝率（信心程度用），回測排在 build_site.py 之後才跑，來不及讓
+        # build_site.py 自己複製，不然原本只能等「下一次」daily-update 開始時才間接補上，
+        # 平常一天只跑一次的話，變成要晚一整天「信心程度」才會真的用上最新的勝率。
         if: always()
         run: |
           [ -f message.txt ] && cp message.txt site/message.txt || echo "沒有 message.txt，略過"
           [ -f stop_message.txt ] && cp stop_message.txt site/stop_message.txt || echo "沒有 stop_message.txt，維持原本的版本"
+          [ -f signal_stats.json ] && cp signal_stats.json site/signal_stats.json || echo "沒有 signal_stats.json，維持原本的版本"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

@@ -54,7 +54,10 @@ def fetch_live_night():
 
 
 def links(code, symbol):
-    """第三方網站快速連結：TradingView（圖表）、Goodinfo（財務/籌碼）、Yahoo 股市（行情/新聞）。"""
+    """第三方網站快速連結：TradingView（圖表）、Goodinfo（財務/籌碼）、Yahoo 股市（行情/新聞）。
+    code 來自證交所官方代號清單，格式固定、不是自由輸入的文字，理論上不會有特殊字元，
+    這裡還是跳脫一下純粹是多一層保險（防禦性寫法，不是在修一個已知會被觸發的漏洞）。"""
+    code = html.escape(str(code))
     market = "TPEX" if str(symbol).endswith(".TWO") else "TWSE"   # TradingView 用交易所前綴
     items = [
         ("圖表", f"https://www.tradingview.com/chart/?symbol={market}%3A{code}"),
@@ -162,9 +165,9 @@ def picks_table(csv_name, by_code):
         return ('<div class="tablewrap"><div class="empty">目前沒有符合條件的股票'
                 '（沒有好標的時空手也是一種選擇）。</div></div>')
     rows = "".join(
-        f"<tr><td class='l'>{r['代號']}</td><td class='l'>{html.escape(str(r['名稱']))}"
+        f"<tr><td class='l'>{html.escape(str(r['代號']))}</td><td class='l'>{html.escape(str(r['名稱']))}"
         f"<div class='links' style='margin-top:4px'>{links(r['代號'], r.get('Yahoo代號', ''))}</div>"
-        f"<button class='btn sm' style='margin-top:4px' data-add='{r['代號']}'>＋觀察</button></td>"
+        f"<button class='btn sm' style='margin-top:4px' data-add='{html.escape(str(r['代號']))}'>＋觀察</button></td>"
         f"<td class='l'>{'<br>'.join(html.escape(str(r['型態'])).split(' ', 1))}"
         + (' <span class="tag t-hot">左側</span>' if r.get("側別") == "左側" else "") + "</td>"
         f"<td style='white-space:nowrap'><span class='{price_mark(r['代號'], by_code)[0]}'>{r['收盤']:,.2f}"
@@ -208,11 +211,12 @@ def multi_signal_html(stocks):
                 f"賺賠比 {g['rr']}</small></div>" for g in right)
             mkt = st["mkt"]
             name_links = links(st["code"], ".TWO" if mkt == "TPEX" else ".TW")
-            rows += (f"<tr><td class='l'><a href='#' data-detail='{st['code']}'>{st['code']}</a>"
+            code_esc = html.escape(str(st["code"]))
+            rows += (f"<tr><td class='l'><a href='#' data-detail='{code_esc}'>{code_esc}</a>"
                      f"<br><span class='tag t-bull'>{n} 個訊號</span></td>"
                      f"<td class='l'>{html.escape(st['name'])}"
                      f"<div class='links' style='margin-top:4px'>{name_links}</div>"
-                     f"<button class='btn sm' style='margin-top:4px' data-add='{st['code']}'>＋觀察</button></td>"
+                     f"<button class='btn sm' style='margin-top:4px' data-add='{code_esc}'>＋觀察</button></td>"
                      f"<td>{price_badge_html(st['close'], st)}</td>"
                      f"<td>{change_cell_html(st)}</td>"
                      f"<td class='l reason' style='color:inherit'>{lines}</td></tr>")

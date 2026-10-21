@@ -10,6 +10,7 @@ candidates_*.csv
 market.json
 stocks.json
 message.txt
+stop_message.txt
 inst_history.json
 universe_cache.json
 signal_stats.json

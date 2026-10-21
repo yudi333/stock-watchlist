@@ -391,10 +391,14 @@ def resend_last_stop_message():
         return
     import requests
     if not STOP_MESSAGE_FILE.exists():
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": chat, "text": "目前還沒有已停損/已停利的通知紀錄可以重發。"},
-                      timeout=30)
-        print("目前沒有 stop_message.txt，已回覆提醒訊息。")
+        try:
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          json={"chat_id": chat, "text": "目前還沒有已停損/已停利的通知紀錄可以重發。"},
+                          timeout=30)
+            print("目前沒有 stop_message.txt，已回覆提醒訊息。")
+        except Exception as e:
+            # 不印出例外內容：requests 的錯誤訊息會帶到含 token 的網址
+            print(f"提醒訊息發送失敗（{type(e).__name__}）。")
         return
     lines = STOP_MESSAGE_FILE.read_text(encoding="utf-8").split("\n")
     ok, total = send_chunks(token, chat, lines)
@@ -409,8 +413,10 @@ def main():
         try:
             resend_last_stop_message()
         except Exception as e:
-            print(f"[注意] 重新發送時發生例外（{type(e).__name__}：{e}），略過。完整錯誤：")
-            traceback.print_exc()
+            # 不印出例外內容、不印完整 traceback：這條路徑上的例外可能來自帶 token 的
+            # Telegram 網址（requests 的錯誤訊息會把完整網址一起帶出來），這個 repo 是公開的，
+            # Actions log 任何人都看得到，印出來等於把 TG_BOT_TOKEN 洩漏給全世界。
+            print(f"[注意] 重新發送時發生例外（{type(e).__name__}），略過。")
             return 1
         return 0
     try:

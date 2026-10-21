@@ -2,6 +2,6 @@
 # matplotlib 只有本機執行 stock_checker.py 畫 K 線圖才需要，自動更新流程用不到，
 # 不裝可以讓每次執行的 pip install 步驟快一點。本機完整安裝請用 requirements.txt。
 yfinance==1.2.0
-pandas==2.3.3
+pandas==3.0.6
 PyYAML==6.0.3
 requests==2.34.2

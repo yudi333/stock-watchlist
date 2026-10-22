@@ -12,8 +12,8 @@ import numpy as np
 import pandas as pd
 
 RISK_REWARD = 2.0       # 賺賠比至少 2:1（課程：2:1 或 3:1）
-HARD_MAX_RISK = 0.15    # 停損最多 15%（原本課程紀律是 10%，使用者要求放寬到跟 risk_range 的
-                        # 上限一致，見 screener.py 的 DAILY/WEEKLY risk_range=(8, 15)）
+HARD_MAX_RISK = 0.18    # 停損最多 18%（原本課程紀律是 10%，使用者要求放寬到跟 risk_range 的
+                        # 上限一致，見 screener.py 的 DAILY/WEEKLY risk_range=(12, 18)）
 MAX_TARGET_GAIN = 0.40  # 滿足點公式有時算出翻倍以上，停利價保守限制在 +40%
 CHASE_PCT = 0.03        # 突破後最多追到突破價 +3%，超過就算追高（不追，等回測）
 MA_SUPPORT_SET = (5, 10, 20, 60)   # 停損參考的支撐線：週線、10日、月線、季線（日線週線共用這組）
@@ -437,7 +437,7 @@ def nearest_ma_support(x, entry):
 def build_trade(m, p, x=None):
     """
     m 有目標價（有公式的訊號）：
-        停損 = 防守參考下方 1%，但停損幅度 ≤ 獲利目標的 1/2 且 ≤ 15%，賺賠比至少 2:1。
+        停損 = 防守參考下方 1%，但停損幅度 ≤ 獲利目標的 1/2 且 ≤ 18%，賺賠比至少 2:1。
     m 沒有目標價（課程沒給公式）：停損 = 防守參考下方 1%，停利 = 2 倍風險。
     不合格回傳 None。
 
@@ -448,7 +448,7 @@ def build_trade(m, p, x=None):
     沒傳（或均線都在進場價上方）就只用型態防守點，維持原本的行為。
 
     p["risk_range"] = (lo, hi)：停損幅度（佔進場價%）的下限／上限，不是課程規定，是這支程式
-    自己訂的（目前日線、週線都是 8~15%，見 screener.py 的 DAILY/WEEKLY）。hi 跟 HARD_MAX_RISK
+    自己訂的（目前日線、週線都是 12~18%，見 screener.py 的 DAILY/WEEKLY）。hi 跟 HARD_MAX_RISK
     一致，是賺賠比限制之外另外設的硬上限；lo 是防呆下限，確保算出來的停損不會窄到被正常盤中
     雜訊隨便洗出場。
     """

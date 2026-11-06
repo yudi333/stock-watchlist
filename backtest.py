@@ -47,6 +47,14 @@ RESULT_COLS = ["結果", "結果日期", "實際報酬%", "持有天數"]
 # 追蹤期限（交易日）：超過這麼多天還沒進場/沒觸發停損停利，就不再繼續無限期等下去
 EXPIRE_DAYS = {"多重訊號": 60, "每日候選": 60, "每週候選": 120}
 OPEN_STATUSES = {"", "追蹤中", "尚未進場"}   # 這些狀態的列才需要重新檢查
+CLOSED_STATUSES = {"已停損", "已停利", "過期未觸發", "過期未進場"}
+VALID_RESULTS = OPEN_STATUSES | CLOSED_STATUSES
+# 「結果」欄只會是上面這幾種值之一；曾經實際發生過欄位整個錯位、「結果」欄被寫進數字
+# （「持有天數」的值跑錯位置）的事故（見 2026-11 的修復），而且錯位一發生就會永遠卡住、
+# 不會自己恢復——錯位的列「結果」不是 OPEN_STATUSES 的值，backtest_sheet() 會把它當成
+# 「已經有終局結果，不用再查」直接跳過，沒有任何機制會再去動它，等於悄悄壞掉、沒有任何
+# 警示，上次是累積了快兩個月、126 列才被人工發現。這裡加一個每次執行都會做的健檢，
+# 一有異常就印出來、也會夾在 Telegram 通知裡，不要再憑運氣發現。
 MIN_SAMPLE = 10   # 少於這個筆數的型態，樣本太少，勝率不穩定、不顯示，避免「3 戰 2 勝=67%」這種誤導
 
 # 結果欄一旦定案（已停損/已停利），整列填滿底色，一眼就看得出哪些已經結束、不用再追——
@@ -137,24 +145,34 @@ def evaluate(df, signal_date, buy_lo, buy_hi, stop, target, expire_days):
 
 
 def backtest_sheet(sh, title, code_col, date_col):
-    """處理一個分頁，回傳 (更新了幾列, 這次新產生的已停損/已停利事件列表)。
-    code_col/date_col 是「代號」「日期」欄的名字。"""
+    """處理一個分頁，回傳 (更新了幾列, 這次新產生的已停損/已停利事件列表, 這次發現的「結果」
+    欄異常值列表)。code_col/date_col 是「代號」「日期」欄的名字。"""
     import gspread
     from stock_checker import fetch_history
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
-        return 0, []
+        return 0, [], []
     values = ws.get_all_values()
     if len(values) < 2:
-        return 0, []
+        return 0, [], []
     header, result_col_idx = ensure_result_cols(ws, values[0])
     idx = {name: header.index(name) for name in
            [code_col, date_col, "名稱", "買進下限", "買進上限", "停損價", "停利價"] if name in header}
     needed = [code_col, date_col, "買進下限", "買進上限", "停損價", "停利價"]
     if any(n not in idx for n in needed):
         print(f"[注意] {title} 缺少必要欄位（{[n for n in needed if n not in idx]}），略過這個分頁。")
-        return 0, []
+        return 0, [], []
+
+    # 健檢：「結果」欄只應該是 VALID_RESULTS 裡的值，不是的話代表欄位錯位（見上面
+    # VALID_RESULTS 的說明）——這種列會被底下的迴圈誤判成「已經有終局結果」直接跳過，
+    # 不會自己修好，所以要在這裡先抓出來，不能只靠底下的迴圈順便發現。
+    anomalies = []
+    for r in range(1, len(values)):
+        row = values[r] + [""] * (len(header) - len(values[r]))
+        val = row[result_col_idx["結果"] - 1]
+        if val not in VALID_RESULTS:
+            anomalies.append((title, r + 1, row[idx[code_col]], val))
 
     expire_days = EXPIRE_DAYS[title]
     cache = {}          # 代號 -> DataFrame，同一檔股票在同一次執行裡只抓一次
@@ -215,7 +233,10 @@ def backtest_sheet(sh, title, code_col, date_col):
     if colors:
         ws.batch_format(colors)
     print(f"{title}：檢查 {checked} 列，更新 {changed} 列")
-    return changed, events
+    if anomalies:
+        print(f"[警告] {title}：發現 {len(anomalies)} 列「結果」欄異常（不是合法的狀態值，疑似欄位錯位），"
+              f"範例：{anomalies[:5]}")
+    return changed, events, anomalies
 
 
 def compute_signal_stats(sh):
@@ -321,7 +342,7 @@ def send_chunks(token, chat, lines):
     return ok, len(chunks)
 
 
-def notify_stop_events(events):
+def notify_stop_events(events, anomalies=None):
     """已停損/已停利的列另外發一則 Telegram 通知到專門的群組（TG_CHAT_ID_STOP），
     跟 notify.py 每天發的候選股摘要（TG_CHAT_ID）完全分開、各自獨立的訂閱對象。
     依分頁（多重訊號／每日候選／每週候選）分組，每組前面先列已停損／已停利各幾檔。
@@ -335,14 +356,25 @@ def notify_stop_events(events):
 
     沒有新事件也會發一句簡短確認（不是完全不發），讓用 Telegram「重新跑」手動觸發的人
     知道流程真的有跑完、不是卡住或哪個環節出錯；這句確認不存進 STOP_MESSAGE_FILE，不會
-    蓋掉「訊息重發」要重發的上一次真實事件內容。"""
+    蓋掉「訊息重發」要重發的上一次真實事件內容。
+
+    anomalies：backtest_sheet() 健檢抓到的「結果」欄異常列（見 VALID_RESULTS 的說明），
+    有的話一定會夾在通知最前面——這種異常不會自己修好、也不會被底下的迴圈再查到，
+    只能靠主動告知，不能讓它又默默卡住兩個月。"""
     token, chat = os.environ.get("TG_BOT_TOKEN"), os.environ.get("TG_CHAT_ID_STOP")
     if not token or not chat:
         print("沒有設定 TG_CHAT_ID_STOP，略過停損/停利通知。")
         return
     today = datetime.now(timezone(timedelta(hours=8)))
+    warn = []
+    if anomalies:
+        warn = ["⚠️ 健檢發現異常：以下列的「結果」欄不是合法狀態值，疑似欄位錯位，需要人工檢查：",
+                *[f"　{title} 第{row}列 {code}：{val!r}" for title, row, code, val in anomalies[:10]]]
+        if len(anomalies) > 10:
+            warn.append(f"　...還有 {len(anomalies) - 10} 列，已略過")
+        warn.append("")
     if not events:
-        lines = [f"日期：{today.year}年{today.month}月{today.day}日", "這次檢查沒有新的已停損/已停利。"]
+        lines = warn + [f"日期：{today.year}年{today.month}月{today.day}日", "這次檢查沒有新的已停損/已停利。"]
         ok, total = send_chunks(token, chat, lines)
         if ok == total:
             print("這次沒有新的已停損/已停利，已發送確認通知。")
@@ -354,7 +386,7 @@ def notify_stop_events(events):
         by_title.setdefault(e["title"], []).append(e)
     titles = TITLE_ORDER + sorted(t for t in by_title if t not in TITLE_ORDER)   # 未知分頁名當保險墊在後面
 
-    lines = [f"日期：{today.year}年{today.month}月{today.day}日", f"🔔 {len(events)} 檔觸發停損/停利"]
+    lines = warn + [f"日期：{today.year}年{today.month}月{today.day}日", f"🔔 {len(events)} 檔觸發停損/停利"]
     for title in titles:
         group = by_title.get(title)
         if not group:
@@ -429,12 +461,12 @@ def main():
         return 0
 
     try:
-        n1, e1 = backtest_sheet(sh, "多重訊號", "代號", "日期")
-        n2, e2 = backtest_sheet(sh, "每日候選", "代號", "日期")
-        n3, e3 = backtest_sheet(sh, "每週候選", "代號", "日期")
+        n1, e1, a1 = backtest_sheet(sh, "多重訊號", "代號", "日期")
+        n2, e2, a2 = backtest_sheet(sh, "每日候選", "代號", "日期")
+        n3, e3, a3 = backtest_sheet(sh, "每週候選", "代號", "日期")
         print(f"回測完成：多重訊號更新 {n1} 列、每日候選更新 {n2} 列、每週候選更新 {n3} 列")
         try:
-            notify_stop_events(e1 + e2 + e3)
+            notify_stop_events(e1 + e2 + e3, anomalies=a1 + a2 + a3)
         except Exception as e:   # 通知失敗不該讓回測本身被當成失敗（結果已經寫進試算表了）
             print(f"[注意] 停損/停利通知發送時發生例外（{type(e).__name__}），略過。")
         try:

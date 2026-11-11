@@ -71,7 +71,7 @@ jobs:
         # force_backtest=true，不管今天有沒有跑過都要真的跑一次——這個快取只影響「今天
         # 已經用 Telegram『重新跑』補跑過」這種情況要不要再跳過，不影響正式排程。
         id: backtest_logged
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .backtest-logged
           key: backtest-logged-${{ steps.sheet_date.outputs.date }}

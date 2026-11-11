@@ -4,4 +4,4 @@ matplotlib==3.11.2
 PyYAML==6.0.3
 requests==2.34.2
 gspread==6.2.1
-google-auth==2.62.0
+google-auth==2.62.1
